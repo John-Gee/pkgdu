@@ -23,6 +23,5 @@ owo-colors = { version = "4", features = ["supports-colors"] }
 tempfile = "3"
 
 [profile.release]
-lto = "fat"
-codegen-units = 1
-incremental = false
+lto = "thin"
+

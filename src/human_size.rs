@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum UnitSpec {
     Raw,
     B,
@@ -92,12 +93,11 @@ fn auto_pick_unit(bytes: u64, is_iec: bool) -> (u64, u32, &'static str) {
 
 fn format_auto(bytes: u64, is_iec: bool) -> String {
     let (int_part, frac, suffix) = auto_pick_unit(bytes, is_iec);
-    if int_part == bytes && !is_iec || (int_part == bytes && is_iec && suffix == "B") {
-        return format!("{} B", bytes)
+    if (suffix == "B" || !is_iec) && int_part == bytes {
+        return format!("{} B", bytes);
     }
     format!("{}.{} {}", int_part, frac, suffix)
 }
-
 
 #[cfg(test)]
 mod tests {
