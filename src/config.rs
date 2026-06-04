@@ -67,6 +67,14 @@ pub struct RawArgs {
     /// Show apparent file size instead of disk blocks (du --apparent-size)
     #[arg(long)]
     pub apparent_size: bool,
+
+    /// Show total row at the bottom of table output
+    #[arg(long)]
+    pub total: bool,
+
+    /// Show file count column
+    #[arg(long)]
+    pub files: bool,
 }
 
 /// Final CLI configuration — built from RawArgs + validation.
@@ -84,6 +92,8 @@ pub struct Config {
     pub delim: String,
     pub no_color: bool,
     pub apparent_size: bool,
+    pub total: bool,
+    pub files: bool,
 }
 
 impl RawArgs {
@@ -156,13 +166,7 @@ impl RawArgs {
         };
 
         // 3. --- Sort field ---
-        // `--sort ratio` is always rejected in Phase 1
         let sort = Self::parse_sort(&self.sort).map_err(PkgduError::Config)?;
-        if matches!(sort, SortField::Ratio) {
-            return Err(PkgduError::Config(
-                "--sort ratio requires --btrfs (not yet supported in Phase 1)".to_string(),
-            ));
-        }
 
         // 4. --- Root existence check ---
         if !self.root.exists() {
@@ -231,6 +235,8 @@ impl RawArgs {
             delim: self.delim,
             no_color: self.no_color,
             apparent_size: self.apparent_size,
+            total: self.total,
+            files: self.files,
         })
     }
 }
@@ -297,10 +303,12 @@ mod tests {
     }
 
     #[test]
-    fn test_config_from_raw_args_sort_ratio_without_btrfs_error() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--sort", "ratio"]);
-        let result = raw.into_config();
-        assert!(result.is_err());
+    fn test_config_from_raw_args_sort_ratio_with_btrfs_ok() {
+        let raw =
+            <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--sort", "ratio", "--btrfs"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.sort, SortField::Ratio);
+        assert!(config.btrfs);
     }
 
     #[test]

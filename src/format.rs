@@ -43,7 +43,7 @@ pub struct FormatString(pub Vec<FormatSegment>);
 
 impl FormatString {
     /// Render the format string for a given package result into an output line.
-    pub fn render(&self, pkg: &crate::scan::PackageResult, _cfg: &crate::Config) -> String {
+    pub fn render(&self, pkg: &crate::scan::PackageResult, cfg: &crate::Config) -> String {
         use crate::human_size::{format_size, UnitSpec};
 
         let mut result = String::new();
@@ -63,7 +63,29 @@ impl FormatString {
                     FormatToken::MetaSize => {
                         result.push_str(&format_size(pkg.metadata_size, UnitSpec::Auto))
                     }
-                    FormatToken::BtrfsSize | FormatToken::BtrfsRatio => result.push_str("N/A"),
+                    FormatToken::BtrfsSize => {
+                        if cfg.btrfs {
+                            match pkg.btrfs_compressed {
+                                Some(s) => result.push_str(&format_size(s, UnitSpec::Auto)),
+                                None => result.push_str("N/A"),
+                            }
+                        } else {
+                            result.push_str("N/A");
+                        }
+                    }
+                    FormatToken::BtrfsRatio => {
+                        if cfg.btrfs {
+                            match pkg.btrfs_compressed {
+                                Some(s) if s > 0 => {
+                                    let ratio = s as f64 / pkg.real_size as f64 * 100.0;
+                                    result.push_str(&format!("{:.0}%", ratio));
+                                }
+                                _ => result.push_str("N/A"),
+                            }
+                        } else {
+                            result.push_str("N/A");
+                        }
+                    }
                     FormatToken::Percent => result.push('%'),
                 },
             }

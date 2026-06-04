@@ -13,9 +13,10 @@ categories = ["command-line-utilities"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 rayon = "1.10"
-nix = { version = "0.29", features = ["fs"] }
-libc = "0.2"
+nix = "0.31"
 regex = "1"
+btrfs-uapi = "0.13"
+btrfs-disk = "0.13"
 unicode-width = "0.2"
 owo-colors = { version = "4", features = ["supports-colors"] }
 

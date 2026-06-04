@@ -1,9 +1,8 @@
+use crate::btrfs;
 use crate::config::{Config, SortField};
 use crate::error::Result;
 use crate::pacman::{load_local_db, Filter};
 use std::path::{Path, PathBuf};
-
-extern crate libc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum StatResult {
@@ -145,20 +144,31 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let mut all_warns_count = 0usize;
     let mut all_warns: Vec<String> = Vec::new();
 
+    // Query btrfs compressed sizes if enabled
+    let btrfs_compressed: Vec<Option<u64>> = if config.btrfs && btrfs::detect_btrfs(&config.root) {
+        btrfs::compressed_sizes(&entries, config)
+    } else {
+        if config.btrfs {
+            all_warns.push(format!(
+                "{} is not on a btrfs filesystem; ignoring --btrfs",
+                config.root.display()
+            ));
+        }
+        vec![None; entries.len()]
+    };
+
     // Build scan report
     let mut result = ScanReport {
         packages: entries
             .iter()
-            .map(|entry| -> PackageResult {
+            .zip(btrfs_compressed.iter())
+            .map(|(entry, &comp)| -> PackageResult {
                 let (apparent, real, file_count, warns) = stat_package(entry, &config.root);
 
                 for w in &warns {
                     all_warns_count += 1;
                     all_warns.push(w.clone());
                 }
-
-                // Btrfs compressed size (stub for Phase 2)
-                let btrfs_compressed: Option<u64> = None;
 
                 PackageResult {
                     name: entry.name.clone(),
@@ -167,7 +177,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
                     apparent_size: apparent,
                     file_count,
                     metadata_size: entry.metadata_size,
-                    btrfs_compressed,
+                    btrfs_compressed: comp,
                 }
             })
             .collect(),
@@ -817,6 +827,8 @@ mod tests {
             delim: "\n".to_string(),
             no_color: false,
             apparent_size: false,
+            total: false,
+            files: false,
         };
         (tmpdir, config)
     }
@@ -877,6 +889,8 @@ mod tests {
             delim: "\n".to_string(),
             no_color: false,
             apparent_size: false,
+            total: false,
+            files: false,
         };
         let report = scan_packages(&c).unwrap();
         assert_eq!(report.packages.len(), 1); // Truncated from 2 to 1 by limit

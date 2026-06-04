@@ -18,7 +18,7 @@ fn strip_ansi(s: &str) -> String {
             // Skip remaining bytes until a final byte (0x40-0x7E) is found
             while let Some(next) = chars.peek().copied() {
                 let b = next as u8;
-                if (b >= 0x40 && b <= 0x7E) || b == 0x3F {
+                if (0x40..=0x7E).contains(&b) || b == 0x3F {
                     chars.next();
                     break;
                 }
@@ -50,20 +50,17 @@ impl Column {
         }
     }
 
-    fn padded_color(&self, value: impl std::fmt::Display, has_color: bool) -> String {
-        if has_color {
-            let s = format!("{}", value);
-            use owo_colors::OwoColorize;
-            let colored = s.bold().cyan().to_string();
-            // Measure only visible characters (strip ANSI codes before width check)
-            let w = UnicodeWidthStr::width(strip_ansi(&colored).as_str());
-            if w < self.width {
-                format!("{}{}", colored, " ".repeat(self.width - w))
-            } else {
-                colored
-            }
+    fn padded_styled<C>(&self, value: impl std::fmt::Display, has_color: bool, style: C) -> String
+    where
+        C: Fn(String) -> String,
+    {
+        let s = format!("{}", value);
+        let colored = if has_color { style(s) } else { s };
+        let w = UnicodeWidthStr::width(strip_ansi(&colored).as_str());
+        if w < self.width {
+            format!("{}{}", colored, " ".repeat(self.width - w))
         } else {
-            self.padded(value)
+            colored
         }
     }
 
@@ -89,9 +86,10 @@ fn format_field_size(bytes: u64, humansize: Option<UnitSpec>) -> String {
 pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
     let has_color = color_enabled(cfg);
 
-    use owo_colors::OwoColorize;
-
     let size_title = if cfg.apparent_size { "APPARENT" } else { "REAL" };
+
+    // Only show btrfs columns when data is actually present
+    let btrfs_active = cfg.btrfs && packages.iter().any(|p| p.btrfs_compressed.is_some());
 
     let mut cols = vec![
         Column {
@@ -102,27 +100,32 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
             title: size_title,
             width: 12,
         },
-        Column {
-            title: "FILES",
-            width: 7,
-        },
     ];
 
-    if cfg.btrfs {
-        cols.insert(
-            2,
-            Column {
-                title: "COMPRESSED",
-                width: 12,
-            },
-        );
+    if btrfs_active {
+        cols.push(Column {
+            title: "COMPRESSED",
+            width: 12,
+        });
+    }
+
+    let files_idx = if cfg.files {
+        let idx = cols.len();
+        cols.push(Column {
+            title: "FILES",
+            width: 7,
+        });
+        Some(idx)
+    } else {
+        None
+    };
+
+    if btrfs_active {
         cols.push(Column {
             title: "RATIO",
             width: 8,
         });
     }
-
-    let file_count_idx = if cfg.btrfs { 3 } else { 2 };
 
     let mut max_name = packages.iter().fold(0usize, |m, p| {
         let w = UnicodeWidthStr::width(p.name.as_str());
@@ -147,35 +150,25 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
         cols[1].width = std::cmp::max(title_w, data_w) + 1;
     }
 
-    {
-        let title_w = UnicodeWidthStr::width(cols[file_count_idx].title);
-        let data_w = packages.iter().fold(0usize, |m, p| {
-            let val = format!("{}", p.file_count);
-            let w = UnicodeWidthStr::width(val.as_str());
-            if w > m { w } else { m }
-        });
-        cols[file_count_idx].width = std::cmp::max(title_w, data_w) + 1;
-    }
-
-    if cfg.btrfs {
+    if btrfs_active {
         {
-            let title_w = UnicodeWidthStr::width(cols[2].title);
+            let idx = 2;
+            let title_w = UnicodeWidthStr::width(cols[idx].title);
             let data_w = packages.iter().fold(0usize, |m, p| {
                 let val = p.btrfs_compressed.map(|bytes| format_field_size(bytes, cfg.humansize)).unwrap_or_else(|| "N/A".to_string());
                 let w = UnicodeWidthStr::width(val.as_str());
                 if w > m { w } else { m }
             });
-            cols[2].width = std::cmp::max(title_w, data_w) + 1;
+            cols[idx].width = std::cmp::max(title_w, data_w) + 1;
         }
 
         let ratio_idx = cols.len() - 1;
         {
             let title_w = UnicodeWidthStr::width(cols[ratio_idx].title);
-            let data_w = packages.iter().fold(0usize, |m, _p| {
-                let val = if cfg.sort == crate::config::SortField::Real || cfg.sort == crate::config::SortField::Files || cfg.sort == crate::config::SortField::Apparent {
-                    "N/A".to_string()
-                } else {
-                    String::new()
+            let data_w = packages.iter().fold(0usize, |m, p| {
+                let val = match p.btrfs_compressed {
+                    Some(s) if s > 0 => format!("{:.0}%", s as f64 / p.real_size as f64 * 100.0),
+                    _ => "N/A".to_string(),
                 };
                 let w = UnicodeWidthStr::width(val.as_str());
                 if w > m { w } else { m }
@@ -184,16 +177,26 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
         }
     }
 
+    if let Some(idx) = files_idx {
+        let title_w = UnicodeWidthStr::width(cols[idx].title);
+        let data_w = packages.iter().fold(0usize, |m, p| {
+            let val = format!("{}", p.file_count);
+            let w = UnicodeWidthStr::width(val.as_str());
+            if w > m { w } else { m }
+        });
+        cols[idx].width = std::cmp::max(title_w, data_w) + 1;
+    }
+
     // Build header row (colorized if TTY)
     let header = cols
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            if i == file_count_idx {
+            if Some(i) == files_idx {
                 let visible_w = UnicodeWidthStr::width(c.title);
                 if has_color {
                     use owo_colors::OwoColorize;
-                    let colored = format!("{}", c.title).bold().cyan().to_string();
+                    let colored = c.title.to_string().bold().to_string();
                     if visible_w < c.width {
                         format!("{}{}", " ".repeat(c.width - visible_w), colored)
                     } else {
@@ -203,7 +206,8 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
                     format!("{:>width$}", c.title, width = c.width)
                 }
             } else if has_color {
-                c.padded_color(c.title, true)
+                use owo_colors::OwoColorize;
+                c.padded_styled(c.title, true, |s| s.bold().to_string())
             } else {
                 c.padded(c.title)
             }
@@ -221,41 +225,112 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
         let size_val = if cfg.apparent_size { pkg.apparent_size } else { pkg.real_size };
         let size_hf = format_field_size(size_val, cfg.humansize);
 
-        if !cfg.btrfs {
-            let f = format!("{:>width$}", pkg.file_count, width = cols[2].width);
-            let file_cell = if has_color {
-                f.bold().cyan().to_string()
+        if !btrfs_active {
+            if cfg.files {
+                out.push(format!(
+                    "{}  {}  {}",
+                    cols[0].padded(&pkg.name),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    format!("{:>width$}", pkg.file_count, width = cols[2].width),
+                ));
             } else {
-                f
-            };
-            out.push(format!(
-                "{}  {}  {}",
-                cols[0].padded_color(&pkg.name, has_color),
-                cols[1].padded_color(&size_hf, has_color),
-                file_cell,
-            ));
+                out.push(format!(
+                    "{}  {}",
+                    cols[0].padded(&pkg.name),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                ));
+            }
         } else {
             let btrfs_compressed = pkg.btrfs_compressed.map(|bytes| format_field_size(bytes, cfg.humansize)).unwrap_or_else(|| "N/A".to_string());
-            let ratio_str = if cfg.sort == crate::config::SortField::Real || cfg.sort == crate::config::SortField::Files || cfg.sort == crate::config::SortField::Apparent {
-                "N/A".to_string()
-            } else {
-                String::new()
+            let ratio_str = match pkg.btrfs_compressed {
+                Some(s) if s > 0 => format!("{:.0}%", s as f64 / pkg.real_size as f64 * 100.0),
+                _ => "N/A".to_string(),
             };
 
-            let f = format!("{:>width$}", pkg.file_count, width = cols[3].width);
-            let file_cell = if has_color {
-                f.bold().cyan().to_string()
+            let ratio_colored = if has_color {
+                use owo_colors::OwoColorize;
+                ratio_str.green().to_string()
             } else {
-                f
+                ratio_str
             };
-            out.push(format!(
-                "{}  {}  {}  {}  {}",
-                cols[0].padded_color(&pkg.name, has_color),
-                cols[1].padded_color(&size_hf, has_color),
-                cols[2].padded_color(&btrfs_compressed, has_color),
-                file_cell,
-                cols.last().unwrap().padded_color(ratio_str, has_color)
-            ));
+
+            if cfg.files {
+                out.push(format!(
+                    "{}  {}  {}  {}  {}",
+                    cols[0].padded(&pkg.name),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    cols[2].padded_styled(&btrfs_compressed, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    format!("{:>width$}", pkg.file_count, width = cols[3].width),
+                    cols.last().unwrap().padded(&ratio_colored)
+                ));
+            } else {
+                out.push(format!(
+                    "{}  {}  {}  {}",
+                    cols[0].padded(&pkg.name),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    cols[2].padded_styled(&btrfs_compressed, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    cols.last().unwrap().padded(&ratio_colored)
+                ));
+            }
+        }
+    }
+
+    // Append total row if requested
+    if cfg.total {
+        let total_real: u64 = packages.iter().map(|p| p.real_size).sum();
+        let total_apparent: u64 = packages.iter().map(|p| p.apparent_size).sum();
+        let total_files: u64 = packages.iter().map(|p| p.file_count).sum();
+        let is_apparent = cfg.apparent_size;
+        let total_size = if is_apparent { total_apparent } else { total_real };
+        let size_hf = format_field_size(total_size, cfg.humansize);
+
+        if !btrfs_active {
+            if cfg.files {
+                out.push(format!(
+                    "{}  {}  {}",
+                    cols[0].padded("TOTAL"),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    format!("{:>width$}", total_files, width = cols[2].width),
+                ));
+            } else {
+                out.push(format!(
+                    "{}  {}",
+                    cols[0].padded("TOTAL"),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                ));
+            }
+        } else {
+            let total_compressed: u64 = packages.iter().filter_map(|p| p.btrfs_compressed).sum();
+            let comp_hf = format_field_size(total_compressed, cfg.humansize);
+            let ratio_str = if total_compressed > 0 {
+                format!("{:.0}%", total_compressed as f64 / total_real as f64 * 100.0)
+            } else {
+                "N/A".to_string()
+            };
+            let ratio_colored = if has_color {
+                use owo_colors::OwoColorize;
+                ratio_str.green().to_string()
+            } else {
+                ratio_str
+            };
+            if cfg.files {
+                out.push(format!(
+                    "{}  {}  {}  {}  {}",
+                    cols[0].padded("TOTAL"),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    cols[2].padded_styled(&comp_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    format!("{:>width$}", total_files, width = cols[3].width),
+                    cols.last().unwrap().padded(&ratio_colored)
+                ));
+            } else {
+                out.push(format!(
+                    "{}  {}  {}  {}",
+                    cols[0].padded("TOTAL"),
+                    cols[1].padded_styled(&size_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    cols[2].padded_styled(&comp_hf, has_color, |s| { use owo_colors::OwoColorize; s.cyan().to_string() }),
+                    cols.last().unwrap().padded(&ratio_colored)
+                ));
+            }
         }
     }
 
@@ -284,7 +359,7 @@ mod tests {
                 apparent_size: 1_200_000_000,
                 file_count: 400,
                 metadata_size: 863_200_000,
-                btrfs_compressed: None,
+                btrfs_compressed: Some(621_504_000),
             },
             PackageResult {
                 name: "bash".to_string(),
@@ -313,6 +388,8 @@ mod tests {
             delim: "\n".to_string(),
             no_color: false,
             apparent_size: false,
+            total: false,
+            files: false,
         }
     }
 
@@ -330,7 +407,7 @@ mod tests {
         let result = render_table(&pkgs, &cfg);
         assert!(result.contains("PACKAGE"));
         assert!(result.contains("REAL"));
-        assert!(result.contains("FILES"));
+        assert!(!result.contains("FILES"));
     }
 
     #[test]
@@ -340,10 +417,19 @@ mod tests {
         let result = render_table(&pkgs, &cfg);
         assert!(result.contains("PACKAGE"));
         assert!(result.contains("REAL"));
-        assert!(result.contains("FILES"));
+        assert!(!result.contains("FILES"));
         assert!(result.contains("zlib"));
         assert!(result.contains("firefox"));
         assert!(result.contains("bash"));
+    }
+
+    #[test]
+    fn test_files_column_when_flag_set() {
+        let pkgs = sample_packages();
+        let mut cfg = make_config(false);
+        cfg.files = true;
+        let result = render_table(&pkgs, &cfg);
+        assert!(result.contains("FILES"));
     }
 
     #[test]
@@ -353,6 +439,18 @@ mod tests {
         let result = render_table(&pkgs, &cfg);
         assert!(result.contains("COMPRESSED"));
         assert!(result.contains("RATIO"));
+        assert!(!result.contains("FILES"));
+    }
+
+    #[test]
+    fn test_btrfs_with_files_flag() {
+        let pkgs = sample_packages();
+        let mut cfg = make_config(true);
+        cfg.files = true;
+        let result = render_table(&pkgs, &cfg);
+        assert!(result.contains("COMPRESSED"));
+        assert!(result.contains("RATIO"));
+        assert!(result.contains("FILES"));
     }
 
 }
