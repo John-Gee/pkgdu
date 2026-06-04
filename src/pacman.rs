@@ -124,6 +124,7 @@ fn last_non_empty(lines: &[String]) -> Option<String> {
 pub fn parse_files(text: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut in_files = false;
+    let mut seen_files = false;
 
     for line in text.lines() {
         if let Some(stripped) = line.strip_prefix('%') {
@@ -131,11 +132,25 @@ pub fn parse_files(text: &str) -> Vec<PathBuf> {
                 let header = stripped.strip_suffix('%').unwrap_or("");
                 if header == "FILES" {
                     in_files = true;
+                    seen_files = true;
                 } else if in_files {
                     break;
                 }
                 continue;
             }
+        }
+
+        if !seen_files {
+            // No %FILES% header seen yet — treat all non-empty lines as paths
+            let path = line.trim();
+            if path.is_empty() {
+                continue;
+            }
+            if path.ends_with('/') {
+                continue;
+            }
+            paths.push(PathBuf::from(path));
+            continue;
         }
 
         if in_files {
