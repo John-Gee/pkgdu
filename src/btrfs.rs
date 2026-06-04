@@ -69,8 +69,7 @@ pub fn compressed_sizes(entries: &[PackageEntry], config: &Config) -> Vec<Option
             }
 
             let ino = meta.ino();
-            let filter =
-                SearchFilter::for_objectid_range(0, BTRFS_EXTENT_DATA_KEY, ino, ino);
+            let filter = SearchFilter::for_objectid_range(0, BTRFS_EXTENT_DATA_KEY, ino, ino);
 
             let _ = tree_search_v2(
                 file.as_fd(),
@@ -101,7 +100,11 @@ pub fn compressed_sizes(entries: &[PackageEntry], config: &Config) -> Vec<Option
             );
         }
 
-        results.push(if has_compressed { Some(pkg_total) } else { None });
+        results.push(if has_compressed {
+            Some(pkg_total)
+        } else {
+            None
+        });
     }
 
     results

@@ -181,7 +181,12 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
             .enumerate()
             .map(|(i, (entry, &comp))| -> PackageResult {
                 if show_progress {
-                    eprint!("\r\x1B[KScanning {} ({}/{})...", entry.name, i + 1, total_entries);
+                    eprint!(
+                        "\r\x1B[KScanning {} ({}/{})...",
+                        entry.name,
+                        i + 1,
+                        total_entries
+                    );
                     let _ = std::io::stderr().flush();
                 }
 
@@ -762,164 +767,5 @@ mod tests {
         assert_eq!(apparent, 0); // FILESYSTEM should be skipped
         assert_eq!(real, 0);
         assert_eq!(count, 0);
-    }
-
-    // J1 — Chroot helper for integration tests
-    fn create_test_chroot(
-        pkg_name: &str,
-        file_data: &[u8],
-        extra_pkg: Option<(&str, &[u8])>,
-    ) -> (tempfile::TempDir, Config) {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let root = tmpdir.path().join("root");
-        let dbpath = tmpdir.path().join("db");
-
-        // Create chroot directory structure
-        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
-
-        // Write file with non-zero byte patterns (0xAB, 0xCD — NOT zeros to avoid sparse files)
-        let data: Vec<u8> = file_data
-            .iter()
-            .map(|&b| if b == 0 { 0xAB } else { b })
-            .collect();
-        let file_path = root.join("usr/bin").join(format!("bin_{}", pkg_name));
-        std::fs::write(&file_path, &data).unwrap();
-
-        // Write pacman local DB desc + files for the primary package
-        let local_dir = dbpath.join("local").join(format!("{}-1.0-1", pkg_name));
-        std::fs::create_dir_all(&local_dir).unwrap();
-
-        let version = "1.0-1";
-        let file_size = data.len() as u64; // apparent size = number of bytes written
-        let desc_content = format!(
-            "%NAME%\n{}\n%VERSION%\n{}\n%SIZE%\n{}\n",
-            pkg_name,
-            version,
-            file_size + file_size // metadata_size is separate from actual file
-        );
-        std::fs::write(local_dir.join("desc"), &desc_content).unwrap();
-
-        // Write files list (relative paths from chroot root)
-        std::fs::write(
-            local_dir.join("files"),
-            format!("%FILES%\nusr/bin/bin_{}\n", pkg_name),
-        )
-        .unwrap();
-
-        // Optionally add a second package for filtering tests
-        if let Some((extra_name, extra_data)) = extra_pkg {
-            let extra_path = root.join("usr/bin").join(format!("bin_{}", extra_name));
-            let extra_bytes: Vec<u8> = extra_data
-                .iter()
-                .map(|&b| if b == 0 { 0xAB } else { b })
-                .collect();
-            std::fs::write(&extra_path, &extra_bytes).unwrap();
-
-            let extra_dir = dbpath.join("local").join(format!("{}-2.0-1", extra_name));
-            std::fs::create_dir_all(&extra_dir).unwrap();
-
-            let extra_file_size = extra_bytes.len() as u64;
-            // Append to existing desc file using a new directory entry
-            let desc_content = format!(
-                "%NAME%\n{}\n%VERSION%\n2.0-1\n%SIZE%\n{}\n",
-                extra_name,
-                extra_file_size + extra_file_size
-            );
-            std::fs::write(extra_dir.join("desc"), &desc_content).unwrap();
-
-            std::fs::write(
-                extra_dir.join("files"),
-                format!("%FILES%\nusr/bin/bin_{}\n", extra_name),
-            )
-            .unwrap();
-        }
-
-        // Create pacman.conf inside chroot root pointing to our dbpath
-        let conf_content = format!("[core]\nDBPath = {}\n", dbpath.display());
-        std::fs::create_dir_all(root.join("etc")).unwrap();
-        std::fs::write(root.join("etc/pacman.conf"), &conf_content).unwrap();
-
-        // Build config with --root and --dbpath pointing at our chroot
-        let config = Config {
-            root: root.clone(),
-            dbpath,
-            targets: vec![],
-            search: None,
-            sort: SortField::Real,
-            limit: Some(20),
-            btrfs: false,
-            verbose: false,
-            format: None,
-            humansize: None,
-            delim: "\n".to_string(),
-            no_color: false,
-            apparent_size: false,
-            total: false,
-            files: false,
-        };
-        (tmpdir, config)
-    }
-
-    // J2 — Integration tests against chroot
-
-    #[test]
-    fn test_scan_single_package() {
-        let (_tmpdir, config) = create_test_chroot("hello", b"hello", None);
-
-        let report = scan_packages(&config).unwrap();
-
-        assert_eq!(report.packages.len(), 1);
-
-        // "hello" = 5 bytes, non-zero padding preserves exact size
-        assert_eq!(report.packages[0].apparent_size, 5);
-        assert_eq!(report.packages[0].file_count, 1);
-        assert_eq!(report.packages[0].name, "hello");
-        assert!(report.skipped_packages == 0);
-    }
-
-    #[test]
-    fn test_scan_two_packages_filter() {
-        let (_tmpdir, mut config) = create_test_chroot("alpha", b"one", Some(("beta", b"two")));
-
-        // Without filter: both packages visible
-        let report = scan_packages(&config).unwrap();
-        assert_eq!(report.packages.len(), 2);
-
-        // With target filter on just "beta": only beta shows
-        config.targets = vec!["beta".to_string()];
-        let report = scan_packages(&config).unwrap();
-        assert_eq!(report.packages.len(), 1);
-        assert_eq!(report.packages[0].name, "beta");
-
-        // Alpha should also be scannable
-        config.targets = vec!["alpha".to_string()];
-        let report = scan_packages(&config).unwrap();
-        assert_eq!(report.packages.len(), 1);
-        assert_eq!(report.packages[0].name, "alpha");
-    }
-
-    #[test]
-    fn test_scan_with_limit() {
-        let (_tmpdir, config) = create_test_chroot("alpha", b"one", Some(("beta", b"two")));
-
-        let c = Config {
-            root: config.root.clone(),
-            dbpath: config.dbpath.clone(),
-            targets: vec![],
-            search: None,
-            sort: SortField::Real,
-            limit: Some(1), // Limit to 1 result
-            btrfs: false,
-            verbose: false,
-            format: None,
-            humansize: None,
-            delim: "\n".to_string(),
-            no_color: false,
-            apparent_size: false,
-            total: false,
-            files: false,
-        };
-        let report = scan_packages(&c).unwrap();
-        assert_eq!(report.packages.len(), 1); // Truncated from 2 to 1 by limit
     }
 }

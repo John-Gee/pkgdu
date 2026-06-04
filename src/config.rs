@@ -304,8 +304,7 @@ mod tests {
 
     #[test]
     fn test_config_from_raw_args_sort_ratio_with_btrfs_ok() {
-        let raw =
-            <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--sort", "ratio", "--btrfs"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--sort", "ratio", "--btrfs"]);
         let config = raw.into_config().unwrap();
         assert_eq!(config.sort, SortField::Ratio);
         assert!(config.btrfs);

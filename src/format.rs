@@ -43,7 +43,7 @@ pub struct FormatString(pub Vec<FormatSegment>);
 
 impl FormatString {
     /// Render the format string for a given package result into an output line.
-    pub fn render(&self, pkg: &crate::scan::PackageResult, cfg: &crate::Config) -> String {
+    pub fn render(&self, pkg: &crate::scan::PackageResult, cfg: &crate::config::Config) -> String {
         use crate::human_size::{format_size, UnitSpec};
 
         let mut result = String::new();
