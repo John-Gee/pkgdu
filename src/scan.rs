@@ -2,6 +2,7 @@ use crate::btrfs;
 use crate::config::{Config, SortField};
 use crate::error::Result;
 use crate::pacman::{load_local_db, Filter};
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -145,24 +146,45 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let mut all_warns: Vec<String> = Vec::new();
 
     // Query btrfs compressed sizes if enabled
-    let btrfs_compressed: Vec<Option<u64>> = if config.btrfs && btrfs::detect_btrfs(&config.root) {
-        btrfs::compressed_sizes(&entries, config)
-    } else {
-        if config.btrfs {
-            all_warns.push(format!(
-                "{} is not on a btrfs filesystem; ignoring --btrfs",
-                config.root.display()
-            ));
+    let mut btrfs_errors: Vec<String> = Vec::new();
+    let btrfs_compressed: Vec<Option<u64>> = if config.btrfs {
+        match btrfs::detect_btrfs(&config.root) {
+            btrfs::BtrfsStatus::Yes => btrfs::compressed_sizes(&entries, config),
+            btrfs::BtrfsStatus::No => {
+                all_warns.push(format!(
+                    "{} is not on a btrfs filesystem; ignoring --btrfs",
+                    config.root.display()
+                ));
+                vec![None; entries.len()]
+            }
+            btrfs::BtrfsStatus::PermissionDenied => {
+                btrfs_errors.push(format!(
+                    "Permission denied accessing btrfs data on {} (try running with sudo)",
+                    config.root.display()
+                ));
+                vec![None; entries.len()]
+            }
         }
+    } else {
         vec![None; entries.len()]
     };
+
+    // Progress indicator: show current package being scanned
+    let show_progress = std::io::stderr().is_terminal();
+    let total_entries = entries.len();
 
     // Build scan report
     let mut result = ScanReport {
         packages: entries
             .iter()
             .zip(btrfs_compressed.iter())
-            .map(|(entry, &comp)| -> PackageResult {
+            .enumerate()
+            .map(|(i, (entry, &comp))| -> PackageResult {
+                if show_progress {
+                    eprint!("\r\x1B[KScanning {} ({}/{})...", entry.name, i + 1, total_entries);
+                    let _ = std::io::stderr().flush();
+                }
+
                 let (apparent, real, file_count, warns) = stat_package(entry, &config.root);
 
                 for w in &warns {
@@ -183,9 +205,14 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
             .collect(),
         skipped_packages: 0, // TODO from load_errors count
         permission_errors: all_warns_count,
-        errors: Vec::new(),
+        errors: btrfs_errors,
         warnings: all_warns,
     };
+
+    if show_progress {
+        eprint!("\r\x1B[K");
+        let _ = std::io::stderr().flush();
+    }
 
     // Apply sort (descending for real/apparent/files/ratio; ascending for name)
     result.sort(sort);

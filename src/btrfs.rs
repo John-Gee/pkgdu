@@ -11,21 +11,28 @@ use btrfs_uapi::tree_search::{tree_search_v2, SearchFilter};
 use crate::config::Config;
 use crate::pacman::PackageEntry;
 
+/// Result of probing whether a path is on btrfs.
+pub enum BtrfsStatus {
+    Yes,
+    No,
+    PermissionDenied,
+}
+
 /// Probe whether `root` is on a btrfs filesystem by attempting the tree
-/// search ioctl on the root directory.  Returns `false` on ENOTTY
-/// (inappropriate ioctl for device), ENOPROTOOPT, or ENOSYS.
-pub fn detect_btrfs(root: &Path) -> bool {
+/// search ioctl on the root directory.
+pub fn detect_btrfs(root: &Path) -> BtrfsStatus {
     let file = match File::open(root) {
         Ok(f) => f,
-        Err(_) => return false,
+        Err(_) => return BtrfsStatus::No,
     };
     let filter = SearchFilter::for_type(0, BTRFS_EXTENT_DATA_KEY);
     match tree_search_v2(file.as_fd(), filter, Some(4096), |_, _| Ok(())) {
-        Ok(()) => true,
+        Ok(()) => BtrfsStatus::Yes,
         Err(nix::errno::Errno::ENOTTY)
         | Err(nix::errno::Errno::ENOPROTOOPT)
-        | Err(nix::errno::Errno::ENOSYS) => false,
-        Err(_) => true,
+        | Err(nix::errno::Errno::ENOSYS) => BtrfsStatus::No,
+        Err(nix::errno::Errno::EPERM) => BtrfsStatus::PermissionDenied,
+        Err(_) => BtrfsStatus::Yes,
     }
 }
 

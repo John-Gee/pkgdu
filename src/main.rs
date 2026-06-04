@@ -9,6 +9,19 @@ mod scan;
 
 use config::{Config, RawArgs};
 
+fn color_enabled(cfg: &Config) -> bool {
+    !cfg.no_color && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn eprint_error(msg: &str, color: bool) {
+    if color {
+        use owo_colors::OwoColorize;
+        eprintln!("{}", msg.red());
+    } else {
+        eprintln!("{}", msg);
+    }
+}
+
 fn main() {
     let raw_args = {
         use clap::Parser;
@@ -23,9 +36,11 @@ fn main() {
         }
     };
 
+    let use_color = color_enabled(&cfg);
+
     // Reject ratio sort if --btrfs is not set
     if cfg.sort == config::SortField::Ratio && !cfg.btrfs {
-        eprintln!("--sort ratio requires --btrfs");
+        eprint_error("--sort ratio requires --btrfs", use_color);
         std::process::exit(1);
     }
 
@@ -39,7 +54,7 @@ fn main() {
 
     // Print diagnostics to stderr
     for err in &report.errors {
-        eprintln!("{}", err);
+        eprint_error(err, use_color);
     }
     if cfg.verbose {
         for warn in &report.warnings {
