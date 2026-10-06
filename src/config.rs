@@ -37,8 +37,8 @@ pub struct RawArgs {
     pub sort: String,
 
     /// Show only top N packages (0 = unlimited)
-    #[arg(short = 'n', default_value_t = 20)]
-    pub limit: usize,
+    #[arg(short = 'n', long)]
+    pub limit: Option<usize>,
 
     /// Enable btrfs compressed size tokens (%z, %r)
     #[arg(long)]
@@ -206,12 +206,13 @@ impl RawArgs {
         }
 
         // 7. --- Limit default ---
-        let limit = match (in_format_mode, self.limit) {
-            (true, 0) => None, // format mode + 0 → unlimited
-            (true, n) if !targets.is_empty() && n > 20 => Some(n), // explicit in format + targets
-            (true, _) => None, // format mode default: unlimited
-            (false, 0) => None, // table mode + 0 → unlimited
-            (false, _) => Some(self.limit), // table mode default
+        // Explicit -n always wins (0 => unlimited). Without -n, table mode
+        // defaults to 20; format mode defaults to unlimited.
+        let limit = match self.limit {
+            Some(0) => None,
+            Some(n) => Some(n),
+            None if in_format_mode => None,
+            None => Some(20),
         };
 
         // Humansize
@@ -349,5 +350,26 @@ mod tests {
         let config = raw.into_config().unwrap();
         assert!(config.format.is_some());
         assert!(config.limit.is_none()); // format mode has no limit by default
+    }
+
+    #[test]
+    fn test_explicit_limit_in_format_mode() {
+        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "-n", "2", "%n"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.limit, Some(2));
+    }
+
+    #[test]
+    fn test_limit_zero_is_unlimited() {
+        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "-n", "0"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.limit, None);
+    }
+
+    #[test]
+    fn test_table_mode_default_limit() {
+        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.limit, Some(20));
     }
 }
