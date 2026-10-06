@@ -74,11 +74,9 @@ fn color_enabled(cfg: &Config) -> bool {
 }
 
 /// Format a size value into human-readable string using optional UnitSpec override.
+/// `None` means raw bytes.
 fn format_field_size(bytes: u64, humansize: Option<UnitSpec>) -> String {
-    match humansize {
-        Some(u) => format_size(bytes, u),
-        None => format_size(bytes, UnitSpec::Auto),
-    }
+    format_size(bytes, humansize.unwrap_or(UnitSpec::Raw))
 }
 
 /// Render the full scan report as a rich table string.

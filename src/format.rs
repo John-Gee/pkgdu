@@ -46,6 +46,9 @@ impl FormatString {
     pub fn render(&self, pkg: &crate::scan::PackageResult, cfg: &crate::config::Config) -> String {
         use crate::human_size::{format_size, UnitSpec};
 
+        // Format mode defaults to raw bytes when -H is not given.
+        let unit = cfg.humansize.unwrap_or(UnitSpec::Raw);
+
         let mut result = String::new();
         for segment in &self.0 {
             match segment {
@@ -53,20 +56,16 @@ impl FormatString {
                 FormatSegment::Token(tok) => match tok {
                     FormatToken::Name => result.push_str(&pkg.name),
                     FormatToken::Version => result.push_str(&pkg.version),
-                    FormatToken::RealSize => {
-                        result.push_str(&format_size(pkg.real_size, UnitSpec::Auto))
-                    }
+                    FormatToken::RealSize => result.push_str(&format_size(pkg.real_size, unit)),
                     FormatToken::ApparentSize => {
-                        result.push_str(&format_size(pkg.apparent_size, UnitSpec::Auto))
+                        result.push_str(&format_size(pkg.apparent_size, unit))
                     }
                     FormatToken::FileCount => result.push_str(&pkg.file_count.to_string()),
-                    FormatToken::MetaSize => {
-                        result.push_str(&format_size(pkg.metadata_size, UnitSpec::Auto))
-                    }
+                    FormatToken::MetaSize => result.push_str(&format_size(pkg.metadata_size, unit)),
                     FormatToken::BtrfsSize => {
                         if cfg.btrfs {
                             match pkg.btrfs_compressed {
-                                Some(s) => result.push_str(&format_size(s, UnitSpec::Auto)),
+                                Some(s) => result.push_str(&format_size(s, unit)),
                                 None => result.push_str("N/A"),
                             }
                         } else {
@@ -281,5 +280,51 @@ mod tests {
             })
             .collect();
         assert_eq!(token_types.len(), 9);
+    }
+
+    fn render_test_pkg() -> crate::scan::PackageResult {
+        crate::scan::PackageResult {
+            name: "pkg".to_string(),
+            version: "1.0-1".to_string(),
+            real_size: 1_048_576,
+            apparent_size: 2_048,
+            file_count: 3,
+            metadata_size: 4_096,
+            btrfs_compressed: None,
+        }
+    }
+
+    fn render_test_config(humansize: Option<crate::human_size::UnitSpec>) -> crate::config::Config {
+        crate::config::Config {
+            root: std::path::PathBuf::from("/"),
+            dbpath: std::path::PathBuf::from("/var/lib/pacman"),
+            targets: vec![],
+            search: None,
+            sort: crate::config::SortField::Real,
+            limit: None,
+            btrfs: false,
+            verbose: false,
+            format: None,
+            humansize,
+            delim: "\n".to_string(),
+            no_color: false,
+            apparent_size: false,
+            total: false,
+            files: false,
+        }
+    }
+
+    #[test]
+    fn test_render_uses_raw_when_unit_is_none() {
+        let fmt = FormatString::parse("%m").unwrap();
+        let cfg = render_test_config(None);
+        assert_eq!(fmt.render(&render_test_pkg(), &cfg), "1048576");
+    }
+
+    #[test]
+    fn test_render_respects_humansize() {
+        let fmt = FormatString::parse("%m %a").unwrap();
+        let cfg = render_test_config(Some(crate::human_size::UnitSpec::Mi));
+        assert_eq!(fmt.render(&render_test_pkg(), &cfg), "1.0 MiB 0.0 MiB");
     }
 }

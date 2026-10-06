@@ -81,7 +81,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | Flag | Default | Description |
 |------|---------|-------------|
 | `[POSITIONAL]...` | (table mode) | Format string or package names |
-| `-H <unit>` | raw bytes | Human-size: `B`, `K`/`Ki`, `M`/`Mi`, `G`/`Gi`, `T`/`Ti`, `auto`, `auto-si` |
+| `-H <unit>` | `raw` (format) / `auto` (table) | Human-size: `B`, `K`/`Ki`, `M`/`Mi`, `G`/`Gi`, `T`/`Ti`, `auto`, `auto-si` |
 | `-s <regex>` | — | Search packages by regex on name |
 | `--sort <field>` | `real` | Sort by: `name` (ascending A-Z), `real`/`apparent`/`files`/`ratio` (descending) |
 | `-n, --limit <N>` | 20 | Show only top N packages (0 = unlimited) |

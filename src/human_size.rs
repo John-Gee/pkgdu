@@ -1,8 +1,6 @@
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub enum UnitSpec {
     Raw,
-    B,
     K,
     Ki,
     M,
@@ -20,41 +18,23 @@ fn round_half_up_scaled(num: u64, den: u64) -> (u64, u32) {
     (scaled / 10, (scaled % 10) as u32)
 }
 
+/// Format using one fixed unit: divide, one decimal (round-half-up), suffix.
+fn format_fixed(bytes: u64, divisor: u64, suffix: &str) -> String {
+    let (int_part, frac) = round_half_up_scaled(bytes, divisor);
+    format!("{}.{} {}", int_part, frac, suffix)
+}
+
 pub fn format_size(bytes: u64, unit: UnitSpec) -> String {
     match unit {
-        UnitSpec::Raw | UnitSpec::B => bytes.to_string(),
-        UnitSpec::K => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_000);
-            format!("{}.{}", int, frac)
-        }
-        UnitSpec::Ki => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_024);
-            format!("{}.{} KiB", int, frac)
-        }
-        UnitSpec::M => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_000_000);
-            format!("{}.{}", int, frac)
-        }
-        UnitSpec::Mi => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_048_576);
-            format!("{}.{} MiB", int, frac)
-        }
-        UnitSpec::G => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_000_000_000);
-            format!("{}.{}", int, frac)
-        }
-        UnitSpec::Gi => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_073_741_824);
-            format!("{}.{} GiB", int, frac)
-        }
-        UnitSpec::T => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_000_000_000_000);
-            format!("{}.{}", int, frac)
-        }
-        UnitSpec::Ti => {
-            let (int, frac) = round_half_up_scaled(bytes, 1_099_511_627_776);
-            format!("{}.{} TiB", int, frac)
-        }
+        UnitSpec::Raw => bytes.to_string(),
+        UnitSpec::K => format_fixed(bytes, 1_000, "K"),
+        UnitSpec::Ki => format_fixed(bytes, 1_024, "KiB"),
+        UnitSpec::M => format_fixed(bytes, 1_000_000, "M"),
+        UnitSpec::Mi => format_fixed(bytes, 1_048_576, "MiB"),
+        UnitSpec::G => format_fixed(bytes, 1_000_000_000, "G"),
+        UnitSpec::Gi => format_fixed(bytes, 1_073_741_824, "GiB"),
+        UnitSpec::T => format_fixed(bytes, 1_000_000_000_000, "T"),
+        UnitSpec::Ti => format_fixed(bytes, 1_099_511_627_776, "TiB"),
         UnitSpec::Auto => format_auto(bytes, true),
         UnitSpec::AutoSi => format_auto(bytes, false),
     }
@@ -109,13 +89,8 @@ mod tests {
     }
 
     #[test]
-    fn test_b_zero() {
-        assert_eq!(format_size(0, UnitSpec::B), "0");
-    }
-
-    #[test]
     fn test_kilobytes_1k_raw() {
-        assert_eq!(format_size(1_000, UnitSpec::K), "1.0");
+        assert_eq!(format_size(1_000, UnitSpec::K), "1.0 K");
     }
 
     #[test]
@@ -125,7 +100,7 @@ mod tests {
 
     #[test]
     fn test_megabytes_1536000_raw() {
-        assert_eq!(format_size(1_536_000, UnitSpec::M), "1.5");
+        assert_eq!(format_size(1_536_000, UnitSpec::M), "1.5 M");
     }
 
     #[test]

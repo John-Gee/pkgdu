@@ -101,10 +101,14 @@ impl RawArgs {
     fn parse_humansize(s: &str) -> std::result::Result<UnitSpec, String> {
         match s {
             "B" => Ok(UnitSpec::Raw),
-            "K" | "Ki" => Ok(UnitSpec::Ki),
-            "M" | "Mi" => Ok(UnitSpec::Mi),
-            "G" | "Gi" => Ok(UnitSpec::Gi),
-            "T" | "Ti" => Ok(UnitSpec::Ti),
+            "K" => Ok(UnitSpec::K),
+            "M" => Ok(UnitSpec::M),
+            "G" => Ok(UnitSpec::G),
+            "T" => Ok(UnitSpec::T),
+            "Ki" => Ok(UnitSpec::Ki),
+            "Mi" => Ok(UnitSpec::Mi),
+            "Gi" => Ok(UnitSpec::Gi),
+            "Ti" => Ok(UnitSpec::Ti),
             "auto" => Ok(UnitSpec::Auto),
             "auto-si" => Ok(UnitSpec::AutoSi),
             _ => Err(format!("invalid -H value: {}", s)),
@@ -215,11 +219,12 @@ impl RawArgs {
             None => Some(20),
         };
 
-        // Humansize
-        let humansize = if let Some(ref hs) = self.humansize {
-            Some(Self::parse_humansize(hs).map_err(PkgduError::Config)?)
-        } else {
-            None
+        // Human-size unit. The default depends on the mode: raw bytes for the
+        // machine-facing format string, auto for the human-facing table.
+        let humansize = match self.humansize {
+            Some(ref hs) => Some(Self::parse_humansize(hs).map_err(PkgduError::Config)?),
+            None if in_format_mode => None,
+            None => Some(UnitSpec::Auto),
         };
 
         Ok(Config {
@@ -267,6 +272,40 @@ mod tests {
     fn test_parse_humansize_invalid_value() {
         let result = RawArgs::parse_humansize("invalid_xyz");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_humansize_si_and_iec_are_distinct() {
+        assert!(matches!(
+            RawArgs::parse_humansize("K").unwrap(),
+            UnitSpec::K
+        ));
+        assert!(matches!(
+            RawArgs::parse_humansize("Ki").unwrap(),
+            UnitSpec::Ki
+        ));
+        assert!(matches!(
+            RawArgs::parse_humansize("M").unwrap(),
+            UnitSpec::M
+        ));
+        assert!(matches!(
+            RawArgs::parse_humansize("Mi").unwrap(),
+            UnitSpec::Mi
+        ));
+    }
+
+    #[test]
+    fn test_format_mode_default_unit_is_raw() {
+        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "%m"]);
+        let config = raw.into_config().unwrap();
+        assert!(config.humansize.is_none());
+    }
+
+    #[test]
+    fn test_table_mode_default_unit_is_auto() {
+        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu"]);
+        let config = raw.into_config().unwrap();
+        assert!(matches!(config.humansize, Some(UnitSpec::Auto)));
     }
 
     #[test]
