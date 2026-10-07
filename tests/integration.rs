@@ -1,4 +1,4 @@
-use pkgdu::config::{Config, SortField};
+use pkgdu::config::{Config, RawArgs, SortField};
 use pkgdu::pacman::{load_local_db, Filter};
 use pkgdu::scan;
 use std::fs;
@@ -295,6 +295,40 @@ fn test_scan_sort_by_real() {
     assert_eq!(report.packages[0].name, "testpkg");
     assert_eq!(report.packages[1].name, "secpkg");
     assert_eq!(report.packages[2].name, "emptypkg");
+}
+
+#[test]
+fn test_root_rebases_default_dbpath() {
+    use clap::Parser;
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("root");
+    fs::create_dir_all(root.join("etc")).unwrap();
+    fs::create_dir_all(root.join("var/lib/pacman/local")).unwrap();
+    fs::write(root.join("etc/pacman.conf"), "DBPath = /var/lib/pacman\n").unwrap();
+
+    let raw = RawArgs::parse_from(["pkgdu", "--root", root.to_str().unwrap()]);
+    let cfg = raw.into_config().unwrap();
+    assert_eq!(cfg.dbpath, root.join("var/lib/pacman"));
+}
+
+#[test]
+fn test_dbpath_override_is_not_rebased() {
+    use clap::Parser;
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("root");
+    let db = tmp.path().join("db");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&db).unwrap();
+
+    let raw = RawArgs::parse_from([
+        "pkgdu",
+        "--root",
+        root.to_str().unwrap(),
+        "--dbpath",
+        db.to_str().unwrap(),
+    ]);
+    let cfg = raw.into_config().unwrap();
+    assert_eq!(cfg.dbpath, db);
 }
 
 #[test]

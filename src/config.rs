@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{PkgduError, Result};
 use crate::format::FormatString;
@@ -96,6 +96,16 @@ pub struct Config {
     pub files: bool,
 }
 
+/// Rebase an absolute path from the target system onto `root`, e.g.
+/// `/var/lib/pacman` with root `/mnt/arch` -> `/mnt/arch/var/lib/pacman`.
+/// With root `/` the path is returned unchanged.
+fn rebase_under_root(root: &Path, path: &Path) -> PathBuf {
+    match path.strip_prefix("/") {
+        Ok(rel) => root.join(rel),
+        Err(_) => root.join(path),
+    }
+}
+
 impl RawArgs {
     /// Parse a humansize string into UnitSpec.
     fn parse_humansize(s: &str) -> std::result::Result<UnitSpec, String> {
@@ -181,6 +191,10 @@ impl RawArgs {
         }
 
         // 5. --- DBPath resolution ---
+        // --dbpath is absolute and used as-is (not rebased under --root, per
+        // the documented contract). Otherwise the target's DBPath (from
+        // {root}/etc/pacman.conf, default /var/lib/pacman) is rebased under
+        // --root so that scanning a chroot reads that chroot's database.
         let dbpath = if let Some(ref db) = self.dbpath {
             if !db.is_absolute() {
                 return Err(PkgduError::Config(
@@ -189,16 +203,15 @@ impl RawArgs {
             }
             db.clone()
         } else {
-            // Default: read from pacman.conf (via --root/etc/pacman.conf) or /var/lib/pacman
-            let conf_path = self.root.join("etc/pacman.conf");
-            if conf_path.exists() {
-                match parse_pacman_conf(&conf_path) {
-                    Ok(conf) => conf.dbpath.clone(),
-                    Err(_) => PathBuf::from("/var/lib/pacman"),
-                }
-            } else {
-                PathBuf::from("/var/lib/pacman")
-            }
+            let configured = self
+                .root
+                .join("etc/pacman.conf")
+                .exists()
+                .then(|| parse_pacman_conf(&self.root.join("etc/pacman.conf")).ok())
+                .flatten()
+                .map(|conf| conf.dbpath)
+                .unwrap_or_else(|| PathBuf::from("/var/lib/pacman"));
+            rebase_under_root(&self.root, &configured)
         };
 
         // 6. --- dbpath existence check ---
@@ -365,6 +378,18 @@ mod tests {
         let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--dbpath", "relative/path"]);
         let result = raw.into_config();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rebase_under_root() {
+        assert_eq!(
+            rebase_under_root(Path::new("/"), Path::new("/var/lib/pacman")),
+            PathBuf::from("/var/lib/pacman")
+        );
+        assert_eq!(
+            rebase_under_root(Path::new("/mnt/arch"), Path::new("/var/lib/pacman")),
+            PathBuf::from("/mnt/arch/var/lib/pacman")
+        );
     }
 
     #[test]

@@ -119,18 +119,11 @@ fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, 
     (apparent, real, count, warns)
 }
 
-/// Resolve dbpath from config.
-fn resolve_dbpath(config: &Config) -> PathBuf {
-    if !config.dbpath.exists() {
-        // Fallback to default DB path when overridden path doesn't exist
-        std::path::Path::new("/var/lib/pacman").to_path_buf()
-    } else {
-        config.dbpath.clone()
-    }
-}
 /// Run a full scan over the configured package set.
 pub fn scan_packages(config: &Config) -> Result<ScanReport> {
-    let dbpath = resolve_dbpath(config);
+    // Config validation guarantees the dbpath exists; a missing or unreadable
+    // directory is a fatal error surfaced by load_local_db.
+    let dbpath = &config.dbpath;
 
     // Build filter from targets or search
     let filter = Filter {
@@ -139,7 +132,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     };
 
     // Load and parse pacman local DB (parallel over parsed pkg lists)
-    let (entries, skipped, load_errors) = load_local_db(&dbpath, &filter)?;
+    let (entries, skipped, load_errors) = load_local_db(dbpath, &filter)?;
 
     if entries.is_empty() {
         return Ok(ScanReport {
