@@ -64,8 +64,8 @@ fn main() {
     };
     println!("{}", result);
 
-    // Exit codes
-    if report.skipped_packages + report.permission_errors > 0 {
+    // Exit codes: 2 when any package or file could not be fully scanned.
+    if report.skipped_packages + report.permission_errors > 0 || !report.errors.is_empty() {
         std::process::exit(2);
     }
 }

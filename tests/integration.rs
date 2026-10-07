@@ -296,3 +296,30 @@ fn test_scan_sort_by_real() {
     assert_eq!(report.packages[1].name, "secpkg");
     assert_eq!(report.packages[2].name, "emptypkg");
 }
+
+#[test]
+fn test_scan_malformed_desc_is_reported_and_counted() {
+    let (_tmp, config) = create_test_chroot();
+
+    // A package dir whose desc has a NAME header but no value => malformed.
+    let bad = config.dbpath.join("local").join("badpkg-1.0-1");
+    fs::create_dir_all(&bad).unwrap();
+    fs::write(
+        bad.join("desc"),
+        "%NAME%\n%VERSION%\n%SIZE%\n10\n",
+    )
+    .unwrap();
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    // The malformed package is skipped, counted, and its error is surfaced.
+    assert!(report.skipped_packages >= 1);
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.contains("badpkg") && e.contains("Malformed")),
+        "expected a malformed-desc diagnostic, got: {:?}",
+        report.errors
+    );
+}

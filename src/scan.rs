@@ -125,15 +125,14 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     };
 
     // Load and parse pacman local DB (parallel over parsed pkg lists)
-    let (entries, _skipped, load_errors) = load_local_db(&dbpath, &filter)?;
+    let (entries, skipped, load_errors) = load_local_db(&dbpath, &filter)?;
 
     if entries.is_empty() {
-        let errors = load_errors.into_iter().collect::<Vec<_>>();
         return Ok(ScanReport {
             packages: vec![],
-            skipped_packages: 0,
+            skipped_packages: skipped,
             permission_errors: 0,
-            errors,
+            errors: load_errors,
             warnings: Vec::new(),
         });
     }
@@ -208,9 +207,14 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
                 }
             })
             .collect(),
-        skipped_packages: 0, // TODO from load_errors count
+        skipped_packages: skipped,
         permission_errors: all_warns_count,
-        errors: btrfs_errors,
+        errors: {
+            // Malformed-package diagnostics plus btrfs errors.
+            let mut errors = load_errors;
+            errors.append(&mut btrfs_errors);
+            errors
+        },
         warnings: all_warns,
     };
 
