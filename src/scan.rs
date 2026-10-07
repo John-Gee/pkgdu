@@ -4,7 +4,7 @@ use crate::error::Result;
 use crate::pacman::{load_local_db, Filter};
 use rayon::prelude::*;
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -281,8 +281,8 @@ impl ScanReport {
 
         // Ratio sort: defined ratios first in ascending order (best compression
         // first), undefined ratios last, ties broken by name.
-        self.packages.sort_by(|a, b| {
-            match (a.btrfs_ratio_percent(), b.btrfs_ratio_percent()) {
+        self.packages.sort_by(
+            |a, b| match (a.btrfs_ratio_percent(), b.btrfs_ratio_percent()) {
                 (Some(ra), Some(rb)) => ra
                     .partial_cmp(&rb)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -290,8 +290,8 @@ impl ScanReport {
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => a.name.cmp(&b.name),
-            }
-        });
+            },
+        );
     }
 
     /// Limit packages to the first N (by order).
@@ -302,36 +302,10 @@ impl ScanReport {
     }
 }
 
-/// Resolve system path against root prefix.
-#[allow(dead_code)]
-pub(crate) fn resolve_path(root: &Path, rel: &str) -> PathBuf {
-    if let Some(p) = rel.strip_prefix("/") {
-        root.join(p)
-    } else {
-        root.join(rel)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn test_resolve_path_absolute() {
-        assert_eq!(
-            resolve_path(Path::new("/mnt"), "/usr/bin/ls"),
-            PathBuf::from("/mnt/usr/bin/ls")
-        );
-    }
-
-    #[test]
-    fn test_resolve_path_relative() {
-        assert_eq!(
-            resolve_path(Path::new("/mnt"), "etc/passwd"),
-            PathBuf::from("/mnt/etc/passwd")
-        );
-    }
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn test_stat_package_empty() {

@@ -97,12 +97,6 @@ impl FormatString {
         let segments = parse_segments(s);
         Ok(FormatString(segments))
     }
-
-    /// Detect if the first positional argument is a format string (contains `%`).
-    #[allow(dead_code)]
-    pub fn is_format_string(arg: &str) -> bool {
-        arg.contains('%')
-    }
 }
 
 fn parse_segments(input: &str) -> Vec<FormatSegment> {

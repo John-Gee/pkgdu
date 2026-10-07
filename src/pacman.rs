@@ -395,9 +395,30 @@ mod tests {
 
     // D6/D7 — pacman_conf tests
     #[test]
-    fn test_parse_pacman_conf_valid() {
-        let _text = "[core]\nDBPath = /tmp/my_db\n";
-        let conf = parse_pacman_conf(Path::new("/dev/null")).unwrap();
+    fn test_parse_pacman_conf_valid_dbpath() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conf_path = tmp.path().join("pacman.conf");
+        std::fs::write(
+            &conf_path,
+            "# comment\n[options]\nDBPath = /tmp/my_db\nArchitecture = auto\n",
+        )
+        .unwrap();
+        let conf = parse_pacman_conf(&conf_path).unwrap();
+        assert_eq!(conf.dbpath, PathBuf::from("/tmp/my_db"));
+    }
+
+    #[test]
+    fn test_parse_pacman_conf_missing_file_defaults() {
+        let conf = parse_pacman_conf(Path::new("/nonexistent_pkgdu_pacman.conf")).unwrap();
+        assert_eq!(conf.dbpath, PathBuf::from("/var/lib/pacman"));
+    }
+
+    #[test]
+    fn test_parse_pacman_conf_empty_dbpath_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conf_path = tmp.path().join("pacman.conf");
+        std::fs::write(&conf_path, "DBPath =\n").unwrap();
+        let conf = parse_pacman_conf(&conf_path).unwrap();
         assert_eq!(conf.dbpath, PathBuf::from("/var/lib/pacman"));
     }
 

@@ -309,14 +309,14 @@ mod tests {
 
     #[test]
     fn test_format_mode_default_unit_is_raw() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "%m"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "%m"]);
         let config = raw.into_config().unwrap();
         assert!(config.humansize.is_none());
     }
 
     #[test]
     fn test_table_mode_default_unit_is_auto() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu"]);
         let config = raw.into_config().unwrap();
         assert!(matches!(config.humansize, Some(UnitSpec::Auto)));
     }
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_config_from_raw_args_sort_ratio_with_btrfs_ok() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--sort", "ratio", "--btrfs"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--sort", "ratio", "--btrfs"]);
         let config = raw.into_config().unwrap();
         assert_eq!(config.sort, SortField::Ratio);
         assert!(config.btrfs);
@@ -367,7 +367,7 @@ mod tests {
     fn test_root_nonexistent_error() {
         // Put --root BEFORE positionals so trailing_var_arg doesn't swallow it
         let raw =
-            <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--root", "/nonexistent_path_xyz"]);
+            <RawArgs as clap::Parser>::parse_from(["pkgdu", "--root", "/nonexistent_path_xyz"]);
         let result = raw.into_config();
         assert!(result.is_err());
     }
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn test_dbpath_relative_error() {
         // Put --dbpath BEFORE positionals so trailing_var_arg doesn't swallow it
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "--dbpath", "relative/path"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--dbpath", "relative/path"]);
         let result = raw.into_config();
         assert!(result.is_err());
     }
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_targets_when_no_format_string() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "glibc", "firefox"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "glibc", "firefox"]);
         let config = raw.into_config().unwrap();
         assert_eq!(
             config.targets,
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_format_mode_sets_no_limit() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "%n\t%m"]); // format mode: unlimited by default
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "%n\t%m"]); // format mode: unlimited by default
         let config = raw.into_config().unwrap();
         assert!(config.format.is_some());
         assert!(config.limit.is_none()); // format mode has no limit by default
@@ -418,21 +418,21 @@ mod tests {
 
     #[test]
     fn test_explicit_limit_in_format_mode() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "-n", "2", "%n"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "-n", "2", "%n"]);
         let config = raw.into_config().unwrap();
         assert_eq!(config.limit, Some(2));
     }
 
     #[test]
     fn test_limit_zero_is_unlimited() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu", "-n", "0"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "-n", "0"]);
         let config = raw.into_config().unwrap();
         assert_eq!(config.limit, None);
     }
 
     #[test]
     fn test_table_mode_default_limit() {
-        let raw = <RawArgs as clap::Parser>::parse_from(&["pkgdu"]);
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu"]);
         let config = raw.into_config().unwrap();
         assert_eq!(config.limit, Some(20));
     }

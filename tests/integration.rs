@@ -244,7 +244,7 @@ fn test_scan_empty_package() {
 
 #[test]
 fn test_scan_multiple_packages() {
-    let (_tmp, mut config) = create_test_chroot();
+    let (_tmp, config) = create_test_chroot();
 
     // Scan all packages
     let report = scan::scan_packages(&config).unwrap();
@@ -255,7 +255,7 @@ fn test_scan_multiple_packages() {
     let total_apparent: u64 = report.packages.iter().map(|p| p.apparent_size).sum();
 
     // testpkg: 5120, secpkg: 4096 (1 file missing), emptypkg: 0
-    assert_eq!(total_apparent, 5120 + 4096 + 0);
+    assert_eq!(total_apparent, (5120 + 4096));
 }
 
 #[test]
@@ -286,7 +286,7 @@ fn test_scan_search_regex() {
 
 #[test]
 fn test_scan_sort_by_real() {
-    let (_tmp, mut config) = create_test_chroot();
+    let (_tmp, config) = create_test_chroot();
 
     let report = scan::scan_packages(&config).unwrap();
 
@@ -359,11 +359,7 @@ fn test_scan_malformed_desc_is_reported_and_counted() {
     // A package dir whose desc has a NAME header but no value => malformed.
     let bad = config.dbpath.join("local").join("badpkg-1.0-1");
     fs::create_dir_all(&bad).unwrap();
-    fs::write(
-        bad.join("desc"),
-        "%NAME%\n%VERSION%\n%SIZE%\n10\n",
-    )
-    .unwrap();
+    fs::write(bad.join("desc"), "%NAME%\n%VERSION%\n%SIZE%\n10\n").unwrap();
 
     let report = scan::scan_packages(&config).unwrap();
 
