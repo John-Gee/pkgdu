@@ -101,7 +101,7 @@ fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, 
         // Skip .FILESYSTEM marker entries
         if file_path
             .file_name()
-            .map(|n| n == "FILESYSTEM")
+            .map(|n| n == ".FILESYSTEM")
             .unwrap_or(false)
         {
             continue;
@@ -799,16 +799,24 @@ mod tests {
     #[test]
     fn test_skip_filesystem_marker() {
         use crate::pacman;
-        // Test package entry with .FILESYSTEM marker
+        // A real file named `.FILESYSTEM` (pacman's marker) must be skipped.
+        let dir = std::env::temp_dir().join("pkgdu_test_filesystem_marker");
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join(".FILESYSTEM");
+        std::fs::write(&marker, b"marker").unwrap();
+
         let entry = pacman::PackageEntry {
             name: "pkg".to_string(),
             version: "1.0-1".to_string(),
             metadata_size: 42,
-            files: vec![PathBuf::from("/.FILESYSTEM")],
+            files: vec![marker.clone()],
         };
         let (apparent, real, count, _warns) = stat_package(&entry, Path::new("/"));
-        assert_eq!(apparent, 0); // FILESYSTEM should be skipped
+        assert_eq!(apparent, 0);
         assert_eq!(real, 0);
         assert_eq!(count, 0);
+
+        std::fs::remove_file(&marker).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 }
