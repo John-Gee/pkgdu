@@ -473,4 +473,16 @@ mod tests {
         assert!(!result.contains("SHOWN"));
         assert!(result.contains("TOTAL"));
     }
+
+    #[test]
+    fn test_btrfs_columns_shown_from_grand_total() {
+        // Compressed data exists in the grand total even though the shown
+        // package has none (e.g. -n hid the compressed packages).
+        let mut report = report_of(sample_packages());
+        report.packages.truncate(1); // zlib, btrfs_compressed: None
+        let cfg = make_config(true);
+        let result = render_table(&report, &cfg);
+        assert!(result.contains("COMPRESSED"), "got:\n{result}");
+        assert!(result.contains("RATIO"));
+    }
 }
