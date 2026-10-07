@@ -190,9 +190,9 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
         {
             let title_w = UnicodeWidthStr::width(cols[ratio_idx].title);
             let data_w = packages.iter().fold(0usize, |m, p| {
-                let val = match p.btrfs_compressed {
-                    Some(s) if s > 0 => format!("{:.0}%", s as f64 / p.real_size as f64 * 100.0),
-                    _ => "N/A".to_string(),
+                let val = match p.btrfs_ratio_percent() {
+                    Some(r) => format!("{:.0}%", r),
+                    None => "N/A".to_string(),
                 };
                 let w = UnicodeWidthStr::width(val.as_str());
                 if w > m {
@@ -288,9 +288,9 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
                 .btrfs_compressed
                 .map(|bytes| format_field_size(bytes, cfg.humansize))
                 .unwrap_or_else(|| "N/A".to_string());
-            let ratio_str = match pkg.btrfs_compressed {
-                Some(s) if s > 0 => format!("{:.0}%", s as f64 / pkg.real_size as f64 * 100.0),
-                _ => "N/A".to_string(),
+            let ratio_str = match pkg.btrfs_ratio_percent() {
+                Some(r) => format!("{:.0}%", r),
+                None => "N/A".to_string(),
             };
 
             let ratio_colored = if has_color {
@@ -372,10 +372,10 @@ pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
         } else {
             let total_compressed: u64 = packages.iter().filter_map(|p| p.btrfs_compressed).sum();
             let comp_hf = format_field_size(total_compressed, cfg.humansize);
-            let ratio_str = if total_compressed > 0 {
+            let ratio_str = if total_compressed > 0 && total_apparent > 0 {
                 format!(
                     "{:.0}%",
-                    total_compressed as f64 / total_real as f64 * 100.0
+                    total_compressed as f64 / total_apparent as f64 * 100.0
                 )
             } else {
                 "N/A".to_string()

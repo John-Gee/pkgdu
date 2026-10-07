@@ -74,12 +74,9 @@ impl FormatString {
                     }
                     FormatToken::BtrfsRatio => {
                         if cfg.btrfs {
-                            match pkg.btrfs_compressed {
-                                Some(s) if s > 0 => {
-                                    let ratio = s as f64 / pkg.real_size as f64 * 100.0;
-                                    result.push_str(&format!("{:.0}%", ratio));
-                                }
-                                _ => result.push_str("N/A"),
+                            match pkg.btrfs_ratio_percent() {
+                                Some(ratio) => result.push_str(&format!("{:.0}%", ratio)),
+                                None => result.push_str("N/A"),
                             }
                         } else {
                             result.push_str("N/A");

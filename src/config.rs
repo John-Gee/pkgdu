@@ -32,7 +32,7 @@ pub struct RawArgs {
     #[arg(short = 's')]
     pub search: Option<String>,
 
-    /// Sort by field: name (ascending), real/apparent/files/ratio (descending)
+    /// Sort by field: name (ascending), real/apparent/files (descending), ratio (ascending)
     #[arg(long, default_value = "real")]
     pub sort: String,
 

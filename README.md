@@ -83,7 +83,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `[POSITIONAL]...` | (table mode) | Format string or package names |
 | `-H <unit>` | `raw` (format) / `auto` (table) | Human-size: `B`, `K`/`Ki`, `M`/`Mi`, `G`/`Gi`, `T`/`Ti`, `auto`, `auto-si` |
 | `-s <regex>` | — | Search packages by regex on name |
-| `--sort <field>` | `real` | Sort by: `name` (ascending A-Z), `real`/`apparent`/`files`/`ratio` (descending) |
+| `--sort <field>` | `real` | Sort by: `name` (ascending A-Z), `real`/`apparent`/`files` (descending), `ratio` (ascending, best compression first) |
 | `-n, --limit <N>` | 20 | Show only top N packages (0 = unlimited) |
 | `--btrfs` | off | Enable btrfs compressed size tokens (`%z`, `%r`) |
 | `--root <path>` | `/` | Set filesystem root prefix |

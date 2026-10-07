@@ -57,6 +57,20 @@ pub struct ScanReport {
     pub warnings: Vec<String>,
 }
 
+impl PackageResult {
+    /// btrfs compression ratio as a percentage of apparent size, so a smaller
+    /// value means better compression. `None` when compressed data is
+    /// unavailable or apparent size is zero (ratio undefined).
+    pub fn btrfs_ratio_percent(&self) -> Option<f64> {
+        match self.btrfs_compressed {
+            Some(compressed) if self.apparent_size > 0 => {
+                Some(compressed as f64 / self.apparent_size as f64 * 100.0)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Stat all files of a package entry, collecting sizes and warnings.
 fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, u64, Vec<String>) {
     let mut apparent = 0u64;
@@ -223,7 +237,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         let _ = std::io::stderr().flush();
     }
 
-    // Apply sort (descending for real/apparent/files/ratio; ascending for name)
+    // Apply sort (descending for real/apparent/files; ascending for name and ratio)
     result.sort(sort);
 
     // Apply limit
@@ -239,7 +253,8 @@ impl ScanReport {
     /// Size-based fields (Real, Apparent, Files): primary = value descending,
     /// secondary name ascending for determinism when values tie.
     /// Name: ascending single pass.
-    /// Ratio: None-compressed last; then by ratio descending, ties by name ascending.
+    /// Ratio: packages with a defined ratio first, ascending (best compression
+    /// first); undefined ratios last; ties by name ascending.
     pub fn sort(&mut self, field: SortField) {
         if matches!(field, SortField::Name) {
             // Name is alphabetical (ascending), simple cmp
@@ -266,24 +281,17 @@ impl ScanReport {
             return;
         }
 
-        // Ratio sort with None-last semantics
+        // Ratio sort: defined ratios first in ascending order (best compression
+        // first), undefined ratios last, ties broken by name.
         self.packages.sort_by(|a, b| {
-            let a_has = a.btrfs_compressed.is_some();
-            let b_has = b.btrfs_compressed.is_some();
-
-            match (a_has, b_has) {
-                (true, true) => {
-                    // Both have Some — compare ratio descending
-                    let ra = a.real_size as f64 / a.btrfs_compressed.unwrap() as f64;
-                    let rb = b.real_size as f64 / b.btrfs_compressed.unwrap() as f64;
-                    rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal)
-                }
-                (false, false) => {
-                    // Both None — tie break on name ascending
-                    std::cmp::Ordering::Equal.then(a.name.cmp(&b.name))
-                }
-                (true, false) => std::cmp::Ordering::Less, // a has Some -> a comes first
-                (false, true) => std::cmp::Ordering::Greater, // b has Some -> b comes first
+            match (a.btrfs_ratio_percent(), b.btrfs_ratio_percent()) {
+                (Some(ra), Some(rb)) => ra
+                    .partial_cmp(&rb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.name.cmp(&b.name)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.name.cmp(&b.name),
             }
         });
     }
@@ -677,12 +685,14 @@ mod tests {
     }
 
     #[test]
-    fn test_sort_ratio_tie_break_on_name() {
+    fn test_sort_ratio_best_compression_first() {
+        // Values chosen so the new ascending key (compressed/apparent) and the
+        // old descending key (real/compressed) would produce different orders.
         let mut report = ScanReport {
             packages: vec![
-                make_pkg("gamma", 300, 100, 1, 50, Some(100)), // ratio 3.0
-                make_pkg("beta", 200, 100, 2, 60, Some(100)),  // ratio 2.0
-                make_pkg("alpha", 400, 100, 3, 30, Some(100)), // ratio 4.0
+                make_pkg("alpha", 100, 100, 1, 50, Some(50)), // 50%; old key 2.0
+                make_pkg("beta", 1000, 100, 2, 60, Some(60)), // 60%; old key 16.7
+                make_pkg("gamma", 200, 100, 3, 30, Some(80)), // 80%; old key 2.5
             ],
             skipped_packages: 0,
             permission_errors: 0,
@@ -690,9 +700,47 @@ mod tests {
             warnings: vec![],
         };
         report.sort(SortField::Ratio);
-        assert_eq!(report.packages[0].name, "alpha"); // ratio 4.0 (highest)
-        assert_eq!(report.packages[1].name, "gamma"); // ratio 3.0
-        assert_eq!(report.packages[2].name, "beta"); // ratio 2.0 (lowest)
+        assert_eq!(report.packages[0].name, "alpha"); // 50% (best)
+        assert_eq!(report.packages[1].name, "beta"); // 60%
+        assert_eq!(report.packages[2].name, "gamma"); // 80% (worst)
+    }
+
+    #[test]
+    fn test_sort_ratio_tie_break_on_name() {
+        let mut report = ScanReport {
+            packages: vec![
+                make_pkg("gamma", 300, 100, 1, 50, Some(50)), // all 50% -> name asc
+                make_pkg("beta", 200, 100, 2, 60, Some(50)),
+                make_pkg("alpha", 400, 100, 3, 30, Some(50)),
+            ],
+            skipped_packages: 0,
+            permission_errors: 0,
+            errors: vec![],
+            warnings: vec![],
+        };
+        report.sort(SortField::Ratio);
+        assert_eq!(report.packages[0].name, "alpha");
+        assert_eq!(report.packages[1].name, "beta");
+        assert_eq!(report.packages[2].name, "gamma");
+    }
+
+    #[test]
+    fn test_btrfs_ratio_percent() {
+        // 50 compressed / 200 apparent => 25%
+        assert_eq!(
+            make_pkg("a", 100, 200, 1, 0, Some(50)).btrfs_ratio_percent(),
+            Some(25.0)
+        );
+        // no compressed data
+        assert_eq!(
+            make_pkg("a", 100, 200, 1, 0, None).btrfs_ratio_percent(),
+            None
+        );
+        // apparent size zero => undefined, not infinity
+        assert_eq!(
+            make_pkg("a", 100, 0, 1, 0, Some(50)).btrfs_ratio_percent(),
+            None
+        );
     }
 
     #[test]
