@@ -1,10 +1,6 @@
-use pkgdu::config::{self, Config, RawArgs};
+use pkgdu::config::{self, RawArgs};
 use pkgdu::output;
 use pkgdu::scan;
-
-fn color_enabled(cfg: &Config) -> bool {
-    !cfg.no_color && std::env::var_os("NO_COLOR").is_none()
-}
 
 fn eprint_error(msg: &str, color: bool) {
     if color {
@@ -29,7 +25,7 @@ fn main() {
         }
     };
 
-    let use_color = color_enabled(&cfg);
+    let use_color = output::stderr_color_enabled(&cfg);
 
     // Reject ratio sort if --btrfs is not set
     if cfg.sort == config::SortField::Ratio && !cfg.btrfs {

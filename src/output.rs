@@ -3,6 +3,7 @@ use crate::human_size::{format_size, UnitSpec};
 
 use crate::scan::PackageResult;
 
+use std::io::IsTerminal;
 use unicode_width::UnicodeWidthStr;
 
 /// Strip ANSI escape sequences from a string, returning only visible text.
@@ -65,12 +66,19 @@ impl Column {
     }
 }
 
-/// Determine whether terminal output supports colors considering NO_COLOR and --no-color.
-fn color_enabled(cfg: &Config) -> bool {
-    if cfg.no_color || std::env::var_os("NO_COLOR").is_some() {
-        return false;
-    }
-    true
+/// Whether the user has permitted colored output at all (independent of stream).
+fn colors_requested(no_color: bool) -> bool {
+    !no_color && std::env::var_os("NO_COLOR").is_none()
+}
+
+/// Color for the stdout table: enabled only when stdout is a terminal.
+pub fn color_enabled(cfg: &Config) -> bool {
+    colors_requested(cfg.no_color) && std::io::stdout().is_terminal()
+}
+
+/// Color for stderr diagnostics: enabled only when stderr is a terminal.
+pub fn stderr_color_enabled(cfg: &Config) -> bool {
+    colors_requested(cfg.no_color) && std::io::stderr().is_terminal()
 }
 
 /// Format a size value into human-readable string using optional UnitSpec override.
@@ -472,10 +480,17 @@ mod tests {
     }
 
     #[test]
-    fn test_color_enabled_no_override() {
+    fn test_color_disabled_by_no_color_flag() {
+        let mut cfg = make_config(false);
+        cfg.no_color = true;
+        assert!(!color_enabled(&cfg));
+    }
+
+    #[test]
+    fn test_color_enabled_false_when_stdout_not_a_tty() {
+        // Under `cargo test` stdout is captured (a pipe), so color must be off.
         let cfg = make_config(false);
-        let result = color_enabled(&cfg);
-        assert!(result); // default true unless NO_COLOR set
+        assert!(!color_enabled(&cfg));
     }
 
     #[test]

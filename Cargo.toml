@@ -18,7 +18,7 @@ regex = "1"
 btrfs-uapi = "0.13"
 btrfs-disk = "0.13"
 unicode-width = "0.2"
-owo-colors = { version = "4", features = ["supports-colors"] }
+owo-colors = "4"
 
 [dev-dependencies]
 tempfile = "3"
