@@ -7,11 +7,11 @@
 complementing `expac` with actual filesystem measurements instead of metadata.
 
 ```
-$ pkgdu -H auto
-PACKAGE                    REAL      APPARENT    FILES
-linux-firmware        1.2 GiB    1.8 GiB     2841
-libreoffice-fresh   823.4 MiB    1.1 GiB      892
-gcc                  412.7 MiB  580.2 MiB     1043
+$ pkgdu -H auto --files
+PACKAGE                    REAL      FILES
+linux-firmware        1.2 GiB       2841
+libreoffice-fresh   823.4 MiB        892
+gcc                 412.7 MiB       1043
 ```
 
 ## Why This Exists
@@ -115,7 +115,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 |------|---------|
 | 0 | Success |
 | 1 | Usage error (invalid args, missing paths) |
-| 2 | Partial failure (some packages/files could not be scanned) |
+| 2 | Partial failure (unreadable files, malformed packages, or unavailable btrfs data) |
 
 ## Architecture
 
