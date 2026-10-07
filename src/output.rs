@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::human_size::{format_size, UnitSpec};
 
-use crate::scan::PackageResult;
+use crate::scan::{PackageResult, ScanReport};
 
 use std::io::IsTerminal;
 use unicode_width::UnicodeWidthStr;
@@ -32,38 +32,99 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
+/// Cell styling applied when color is enabled.
+#[derive(Clone, Copy)]
+enum Style {
+    Plain,
+    Bold,
+    Cyan,
+    Green,
+}
+
+impl Style {
+    fn apply(self, s: &str, has_color: bool) -> String {
+        if !has_color {
+            return s.to_string();
+        }
+        use owo_colors::OwoColorize;
+        match self {
+            Style::Plain => s.to_string(),
+            Style::Bold => s.bold().to_string(),
+            Style::Cyan => s.cyan().to_string(),
+            Style::Green => s.green().to_string(),
+        }
+    }
+}
+
 #[derive(Clone)]
-pub struct Column {
-    pub title: &'static str,
-    pub width: usize,
+struct Column {
+    title: &'static str,
+    width: usize,
+    right_align: bool,
 }
 
 impl Column {
-    fn padded(&self, value: impl std::fmt::Display) -> String {
-        let s = format!("{}", value);
-        // Strip ANSI codes for accurate width measurement
-        let visible = strip_ansi(&s);
-        let w = UnicodeWidthStr::width(visible.as_str());
-        if w < self.width {
-            format!("{}{}", s, " ".repeat(self.width - w))
+    fn pad(&self, value: &str, has_color: bool, style: Style) -> String {
+        let styled = style.apply(value, has_color);
+        let w = UnicodeWidthStr::width(strip_ansi(&styled).as_str());
+        let fill = " ".repeat(self.width.saturating_sub(w));
+        if self.right_align {
+            format!("{}{}", fill, styled)
         } else {
-            s
+            format!("{}{}", styled, fill)
         }
     }
+}
 
-    fn padded_styled<C>(&self, value: impl std::fmt::Display, has_color: bool, style: C) -> String
-    where
-        C: Fn(String) -> String,
-    {
-        let s = format!("{}", value);
-        let colored = if has_color { style(s) } else { s };
-        let w = UnicodeWidthStr::width(strip_ansi(&colored).as_str());
-        if w < self.width {
-            format!("{}{}", colored, " ".repeat(self.width - w))
-        } else {
-            colored
-        }
+/// Percentage of a grand total, ncdu-style. `<0.1%` for small non-zero shares.
+fn format_pct(value: u64, total: u64) -> String {
+    if total == 0 {
+        return "N/A".to_string();
     }
+    let pct = value as f64 / total as f64 * 100.0;
+    if value > 0 && pct < 0.1 {
+        "<0.1%".to_string()
+    } else {
+        format!("{:.1}%", pct)
+    }
+}
+
+/// Sum of compressed sizes over packages that have one.
+fn sum_compressed(pkgs: &[PackageResult]) -> u64 {
+    pkgs.iter().filter_map(|p| p.btrfs_compressed).sum()
+}
+
+/// Compression ratio for a subtotal, as compressed/apparent * 100.
+fn subtotal_ratio(compressed: u64, apparent: u64) -> Option<f64> {
+    if compressed > 0 && apparent > 0 {
+        Some(compressed as f64 / apparent as f64 * 100.0)
+    } else {
+        None
+    }
+}
+
+/// A single table row (a package, or a SHOWN/TOTAL subtotal).
+struct Row {
+    name: String,
+    size: u64,
+    compressed: Option<u64>,
+    files: u64,
+    ratio: Option<f64>,
+}
+
+fn header_row(cols: &[Column], has_color: bool) -> String {
+    cols.iter()
+        .map(|c| c.pad(c.title, has_color, Style::Bold))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn render_row(cols: &[Column], cells: &[(String, Style)], has_color: bool) -> String {
+    cols.iter()
+        .zip(cells.iter())
+        .map(|(c, (text, style))| c.pad(text, has_color, *style))
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// Whether the user has permitted colored output at all (independent of stream).
@@ -87,339 +148,156 @@ fn format_field_size(bytes: u64, humansize: Option<UnitSpec>) -> String {
     format_size(bytes, humansize.unwrap_or(UnitSpec::Raw))
 }
 
-/// Render the full scan report as a rich table string.
-pub fn render_table(packages: &[PackageResult], cfg: &Config) -> String {
+pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
+    let packages = &report.packages;
     let has_color = color_enabled(cfg);
-
-    let size_title = if cfg.apparent_size {
-        "APPARENT"
-    } else {
-        "REAL"
-    };
-
-    // Only show btrfs columns when data is actually present
+    let use_apparent = cfg.apparent_size;
+    let size_title = if use_apparent { "APPARENT" } else { "REAL" };
     let btrfs_active = cfg.btrfs && packages.iter().any(|p| p.btrfs_compressed.is_some());
+
+    let size_of = |p: &PackageResult| {
+        if use_apparent {
+            p.apparent_size
+        } else {
+            p.real_size
+        }
+    };
+    let grand_total = if use_apparent {
+        report.total_apparent
+    } else {
+        report.total_real
+    };
 
     let mut cols = vec![
         Column {
             title: "PACKAGE",
-            width: 8,
+            width: 0,
+            right_align: false,
         },
         Column {
             title: size_title,
-            width: 12,
+            width: 0,
+            right_align: true,
+        },
+        Column {
+            title: "PCT",
+            width: 0,
+            right_align: true,
         },
     ];
-
     if btrfs_active {
         cols.push(Column {
             title: "COMPRESSED",
-            width: 12,
+            width: 0,
+            right_align: true,
         });
     }
-
-    let files_idx = if cfg.files {
-        let idx = cols.len();
+    if cfg.files {
         cols.push(Column {
             title: "FILES",
-            width: 7,
+            width: 0,
+            right_align: true,
         });
-        Some(idx)
-    } else {
-        None
-    };
-
+    }
     if btrfs_active {
         cols.push(Column {
             title: "RATIO",
-            width: 8,
+            width: 0,
+            right_align: true,
         });
     }
-
-    let mut max_name = packages.iter().fold(0usize, |m, p| {
-        let w = UnicodeWidthStr::width(p.name.as_str());
-        if w > m {
-            w
-        } else {
-            m
-        }
-    }) + 1;
-    if max_name < 8 {
-        max_name = 8;
+    for col in cols.iter_mut() {
+        col.width = UnicodeWidthStr::width(col.title);
     }
-    cols[0].width = max_name;
-
-    {
-        let title_w = UnicodeWidthStr::width(cols[1].title);
-        let data_w = packages.iter().fold(0usize, |m, p| {
-            let val = if cfg.apparent_size {
-                format_field_size(p.apparent_size, cfg.humansize)
-            } else {
-                format_field_size(p.real_size, cfg.humansize)
-            };
-            let w = UnicodeWidthStr::width(val.as_str());
-            if w > m {
-                w
-            } else {
-                m
-            }
-        });
-        cols[1].width = std::cmp::max(title_w, data_w) + 1;
-    }
-
-    if btrfs_active {
-        {
-            let idx = 2;
-            let title_w = UnicodeWidthStr::width(cols[idx].title);
-            let data_w = packages.iter().fold(0usize, |m, p| {
-                let val = p
-                    .btrfs_compressed
-                    .map(|bytes| format_field_size(bytes, cfg.humansize))
-                    .unwrap_or_else(|| "N/A".to_string());
-                let w = UnicodeWidthStr::width(val.as_str());
-                if w > m {
-                    w
-                } else {
-                    m
-                }
-            });
-            cols[idx].width = std::cmp::max(title_w, data_w) + 1;
-        }
-
-        let ratio_idx = cols.len() - 1;
-        {
-            let title_w = UnicodeWidthStr::width(cols[ratio_idx].title);
-            let data_w = packages.iter().fold(0usize, |m, p| {
-                let val = match p.btrfs_ratio_percent() {
-                    Some(r) => format!("{:.0}%", r),
-                    None => "N/A".to_string(),
-                };
-                let w = UnicodeWidthStr::width(val.as_str());
-                if w > m {
-                    w
-                } else {
-                    m
-                }
-            });
-            cols[ratio_idx].width = std::cmp::max(title_w, data_w) + 1;
-        }
-    }
-
-    if let Some(idx) = files_idx {
-        let title_w = UnicodeWidthStr::width(cols[idx].title);
-        let data_w = packages.iter().fold(0usize, |m, p| {
-            let val = format!("{}", p.file_count);
-            let w = UnicodeWidthStr::width(val.as_str());
-            if w > m {
-                w
-            } else {
-                m
-            }
-        });
-        cols[idx].width = std::cmp::max(title_w, data_w) + 1;
-    }
-
-    // Build header row (colorized if TTY)
-    let header = cols
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            if Some(i) == files_idx {
-                let visible_w = UnicodeWidthStr::width(c.title);
-                if has_color {
-                    use owo_colors::OwoColorize;
-                    let colored = c.title.to_string().bold().to_string();
-                    if visible_w < c.width {
-                        format!("{}{}", " ".repeat(c.width - visible_w), colored)
-                    } else {
-                        colored
-                    }
-                } else {
-                    format!("{:>width$}", c.title, width = c.width)
-                }
-            } else if has_color {
-                use owo_colors::OwoColorize;
-                c.padded_styled(c.title, true, |s| s.bold().to_string())
-            } else {
-                c.padded(c.title)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("  ");
 
     if packages.is_empty() {
-        return header;
+        return header_row(&cols, has_color);
     }
 
-    let mut out = vec![header];
+    // Package rows.
+    let mut rows: Vec<Row> = packages
+        .iter()
+        .map(|p| Row {
+            name: p.name.clone(),
+            size: size_of(p),
+            compressed: p.btrfs_compressed,
+            files: p.file_count,
+            ratio: p.btrfs_ratio_percent(),
+        })
+        .collect();
 
-    for pkg in packages {
-        let size_val = if cfg.apparent_size {
-            pkg.apparent_size
-        } else {
-            pkg.real_size
-        };
-        let size_hf = format_field_size(size_val, cfg.humansize);
-
-        if !btrfs_active {
-            if cfg.files {
-                let file_col = format!("{:>width$}", pkg.file_count, width = cols[2].width);
-                out.push(format!(
-                    "{}  {}  {}",
-                    cols[0].padded(&pkg.name),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    file_col,
-                ));
-            } else {
-                out.push(format!(
-                    "{}  {}",
-                    cols[0].padded(&pkg.name),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                ));
-            }
-        } else {
-            let btrfs_compressed = pkg
-                .btrfs_compressed
-                .map(|bytes| format_field_size(bytes, cfg.humansize))
-                .unwrap_or_else(|| "N/A".to_string());
-            let ratio_str = match pkg.btrfs_ratio_percent() {
-                Some(r) => format!("{:.0}%", r),
-                None => "N/A".to_string(),
-            };
-
-            let ratio_colored = if has_color {
-                use owo_colors::OwoColorize;
-                ratio_str.green().to_string()
-            } else {
-                ratio_str
-            };
-
-            if cfg.files {
-                let file_col = format!("{:>width$}", pkg.file_count, width = cols[3].width);
-                out.push(format!(
-                    "{}  {}  {}  {}  {}",
-                    cols[0].padded(&pkg.name),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    cols[2].padded_styled(&btrfs_compressed, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    file_col,
-                    cols.last().unwrap().padded(&ratio_colored)
-                ));
-            } else {
-                out.push(format!(
-                    "{}  {}  {}  {}",
-                    cols[0].padded(&pkg.name),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    cols[2].padded_styled(&btrfs_compressed, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    cols.last().unwrap().padded(&ratio_colored)
-                ));
-            }
-        }
-    }
-
-    // Append total row if requested
+    // Optional subtotal and grand-total rows.
     if cfg.total {
-        let total_real: u64 = packages.iter().map(|p| p.real_size).sum();
-        let total_apparent: u64 = packages.iter().map(|p| p.apparent_size).sum();
-        let total_files: u64 = packages.iter().map(|p| p.file_count).sum();
-        let is_apparent = cfg.apparent_size;
-        let total_size = if is_apparent {
-            total_apparent
-        } else {
-            total_real
-        };
-        let size_hf = format_field_size(total_size, cfg.humansize);
+        if packages.len() < report.total_packages {
+            let shown_apparent: u64 = packages.iter().map(|p| p.apparent_size).sum();
+            let shown_compressed = sum_compressed(packages);
+            rows.push(Row {
+                name: format!("SHOWN (top {})", packages.len()),
+                size: rows.iter().map(|r| r.size).sum(),
+                compressed: if btrfs_active {
+                    Some(shown_compressed)
+                } else {
+                    None
+                },
+                files: packages.iter().map(|p| p.file_count).sum(),
+                ratio: subtotal_ratio(shown_compressed, shown_apparent),
+            });
+        }
+        rows.push(Row {
+            name: "TOTAL".to_string(),
+            size: grand_total,
+            compressed: if btrfs_active {
+                Some(report.total_compressed)
+            } else {
+                None
+            },
+            files: report.total_files,
+            ratio: subtotal_ratio(report.total_compressed, report.total_apparent),
+        });
+    }
 
-        if !btrfs_active {
-            if cfg.files {
-                let file_col = format!("{:>width$}", total_files, width = cols[2].width);
-                out.push(format!(
-                    "{}  {}  {}",
-                    cols[0].padded("TOTAL"),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    file_col,
-                ));
-            } else {
-                out.push(format!(
-                    "{}  {}",
-                    cols[0].padded("TOTAL"),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                ));
-            }
-        } else {
-            let total_compressed: u64 = packages.iter().filter_map(|p| p.btrfs_compressed).sum();
-            let comp_hf = format_field_size(total_compressed, cfg.humansize);
-            let ratio_str = if total_compressed > 0 && total_apparent > 0 {
-                format!(
-                    "{:.0}%",
-                    total_compressed as f64 / total_apparent as f64 * 100.0
-                )
-            } else {
-                "N/A".to_string()
-            };
-            let ratio_colored = if has_color {
-                use owo_colors::OwoColorize;
-                ratio_str.green().to_string()
-            } else {
-                ratio_str
-            };
-            if cfg.files {
-                let file_col = format!("{:>width$}", total_files, width = cols[3].width);
-                out.push(format!(
-                    "{}  {}  {}  {}  {}",
-                    cols[0].padded("TOTAL"),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    cols[2].padded_styled(&comp_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    file_col,
-                    cols.last().unwrap().padded(&ratio_colored)
-                ));
-            } else {
-                out.push(format!(
-                    "{}  {}  {}  {}",
-                    cols[0].padded("TOTAL"),
-                    cols[1].padded_styled(&size_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    cols[2].padded_styled(&comp_hf, has_color, |s| {
-                        use owo_colors::OwoColorize;
-                        s.cyan().to_string()
-                    }),
-                    cols.last().unwrap().padded(&ratio_colored)
-                ));
+    let cells_for = |row: &Row| -> Vec<(String, Style)> {
+        let mut cells = vec![
+            (row.name.clone(), Style::Plain),
+            (format_field_size(row.size, cfg.humansize), Style::Cyan),
+            (format_pct(row.size, grand_total), Style::Plain),
+        ];
+        if btrfs_active {
+            cells.push((
+                row.compressed
+                    .map(|c| format_field_size(c, cfg.humansize))
+                    .unwrap_or_else(|| "N/A".to_string()),
+                Style::Cyan,
+            ));
+        }
+        if cfg.files {
+            cells.push((row.files.to_string(), Style::Plain));
+        }
+        if btrfs_active {
+            cells.push((
+                row.ratio
+                    .map(|r| format!("{:.0}%", r))
+                    .unwrap_or_else(|| "N/A".to_string()),
+                Style::Green,
+            ));
+        }
+        cells
+    };
+
+    // Column widths from the actual cell contents.
+    for row in &rows {
+        for (i, (text, _)) in cells_for(row).iter().enumerate() {
+            let w = UnicodeWidthStr::width(text.as_str());
+            if w > cols[i].width {
+                cols[i].width = w;
             }
         }
     }
 
+    let mut out = vec![header_row(&cols, has_color)];
+    for row in &rows {
+        out.push(render_row(&cols, &cells_for(row), has_color));
+    }
     out.join("\n")
 }
 
@@ -457,6 +335,23 @@ mod tests {
                 btrfs_compressed: None,
             },
         ]
+    }
+
+    fn report_of(pkgs: Vec<PackageResult>) -> ScanReport {
+        let total_packages = pkgs.len();
+        let total_real = pkgs.iter().map(|p| p.real_size).sum();
+        let total_apparent = pkgs.iter().map(|p| p.apparent_size).sum();
+        let total_files = pkgs.iter().map(|p| p.file_count).sum();
+        let total_compressed = pkgs.iter().filter_map(|p| p.btrfs_compressed).sum();
+        ScanReport {
+            packages: pkgs,
+            total_packages,
+            total_real,
+            total_apparent,
+            total_files,
+            total_compressed,
+            ..Default::default()
+        }
     }
 
     fn make_config(btrfs_flag: bool) -> Config {
@@ -497,7 +392,7 @@ mod tests {
     fn test_empty_search_result() {
         let pkgs = vec![];
         let cfg = make_config(false);
-        let result = render_table(&pkgs, &cfg);
+        let result = render_table(&report_of(pkgs), &cfg);
         assert!(result.contains("PACKAGE"));
         assert!(result.contains("REAL"));
         assert!(!result.contains("FILES"));
@@ -507,7 +402,7 @@ mod tests {
     fn test_default_mode_no_format() {
         let pkgs = sample_packages();
         let cfg = make_config(false);
-        let result = render_table(&pkgs, &cfg);
+        let result = render_table(&report_of(pkgs), &cfg);
         assert!(result.contains("PACKAGE"));
         assert!(result.contains("REAL"));
         assert!(!result.contains("FILES"));
@@ -521,7 +416,7 @@ mod tests {
         let pkgs = sample_packages();
         let mut cfg = make_config(false);
         cfg.files = true;
-        let result = render_table(&pkgs, &cfg);
+        let result = render_table(&report_of(pkgs), &cfg);
         assert!(result.contains("FILES"));
     }
 
@@ -529,7 +424,7 @@ mod tests {
     fn test_btrfs_columns_enabled() {
         let pkgs = sample_packages();
         let cfg = make_config(true);
-        let result = render_table(&pkgs, &cfg);
+        let result = render_table(&report_of(pkgs), &cfg);
         assert!(result.contains("COMPRESSED"));
         assert!(result.contains("RATIO"));
         assert!(!result.contains("FILES"));
@@ -540,9 +435,40 @@ mod tests {
         let pkgs = sample_packages();
         let mut cfg = make_config(true);
         cfg.files = true;
-        let result = render_table(&pkgs, &cfg);
+        let result = render_table(&report_of(pkgs), &cfg);
         assert!(result.contains("COMPRESSED"));
         assert!(result.contains("RATIO"));
         assert!(result.contains("FILES"));
+    }
+
+    #[test]
+    fn test_pct_column_relative_to_grand_total() {
+        let report = report_of(sample_packages());
+        let cfg = make_config(false);
+        let result = render_table(&report, &cfg);
+        assert!(result.contains("PCT"));
+        // zlib real 2_697_614_592 of total 3_610_814_592 ~= 74.7%
+        assert!(result.contains("74.7%"), "got:\n{result}");
+    }
+
+    #[test]
+    fn test_total_row_shown_and_grand_total_when_truncated() {
+        let mut report = report_of(sample_packages());
+        report.packages.truncate(2); // simulate -n 2
+        let mut cfg = make_config(false);
+        cfg.total = true;
+        let result = render_table(&report, &cfg);
+        assert!(result.contains("SHOWN (top 2)"), "got:\n{result}");
+        assert!(result.contains("TOTAL"));
+    }
+
+    #[test]
+    fn test_total_row_only_grand_total_when_not_truncated() {
+        let report = report_of(sample_packages());
+        let mut cfg = make_config(false);
+        cfg.total = true;
+        let result = render_table(&report, &cfg);
+        assert!(!result.contains("SHOWN"));
+        assert!(result.contains("TOTAL"));
     }
 }

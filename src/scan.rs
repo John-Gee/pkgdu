@@ -59,13 +59,19 @@ pub struct PackageResult {
 }
 
 /// Full scan report with metadata about skipped packages and errors.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ScanReport {
     pub packages: Vec<PackageResult>,
     pub skipped_packages: usize,
     pub permission_errors: usize,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+    /// Grand totals over all matching packages, before `limit` is applied.
+    pub total_packages: usize,
+    pub total_real: u64,
+    pub total_apparent: u64,
+    pub total_files: u64,
+    pub total_compressed: u64,
 }
 
 impl PackageResult {
@@ -160,6 +166,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
             permission_errors: 0,
             errors: load_errors,
             warnings: Vec::new(),
+            ..Default::default()
         });
     }
 
@@ -216,28 +223,37 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         .collect();
 
     // Build scan report (sequential; combines parallel results in entry order)
-    let mut result = ScanReport {
-        packages: entries
-            .iter()
-            .zip(scanned.iter())
-            .zip(btrfs_compressed.iter())
-            .map(
-                |((entry, (apparent, real, file_count, warns)), &comp)| -> PackageResult {
-                    all_warns_count += warns.len();
-                    all_warns.extend(warns.iter().cloned());
+    let packages: Vec<PackageResult> = entries
+        .iter()
+        .zip(scanned.iter())
+        .zip(btrfs_compressed.iter())
+        .map(
+            |((entry, (apparent, real, file_count, warns)), &comp)| -> PackageResult {
+                all_warns_count += warns.len();
+                all_warns.extend(warns.iter().cloned());
 
-                    PackageResult {
-                        name: entry.name.clone(),
-                        version: entry.version.clone(),
-                        real_size: *real,
-                        apparent_size: *apparent,
-                        file_count: *file_count,
-                        metadata_size: entry.metadata_size,
-                        btrfs_compressed: comp,
-                    }
-                },
-            )
-            .collect(),
+                PackageResult {
+                    name: entry.name.clone(),
+                    version: entry.version.clone(),
+                    real_size: *real,
+                    apparent_size: *apparent,
+                    file_count: *file_count,
+                    metadata_size: entry.metadata_size,
+                    btrfs_compressed: comp,
+                }
+            },
+        )
+        .collect();
+
+    // Grand totals over all matching packages (before `limit`).
+    let total_packages = packages.len();
+    let total_real = packages.iter().map(|p| p.real_size).sum();
+    let total_apparent = packages.iter().map(|p| p.apparent_size).sum();
+    let total_files = packages.iter().map(|p| p.file_count).sum();
+    let total_compressed = packages.iter().filter_map(|p| p.btrfs_compressed).sum();
+
+    let mut result = ScanReport {
+        packages,
         skipped_packages: skipped,
         permission_errors: all_warns_count,
         errors: {
@@ -247,6 +263,11 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
             errors
         },
         warnings: all_warns,
+        total_packages,
+        total_real,
+        total_apparent,
+        total_files,
+        total_compressed,
     };
 
     if show_progress {
@@ -416,6 +437,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Real);
         assert_eq!(report.packages[0].name, "b"); // real_size 200
@@ -459,6 +481,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Name);
         assert_eq!(report.packages[0].name, "a");
@@ -493,6 +516,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Apparent);
         assert_eq!(report.packages[0].name, "b"); // apparent_size 1000
@@ -526,6 +550,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Files);
         assert_eq!(report.packages[0].name, "large_dir"); // 20 files
@@ -568,6 +593,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Real);
         assert_eq!(report.packages[0].name, "alpha"); // real_size 300
@@ -611,6 +637,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Name);
         assert_eq!(report.packages[0].name, "a");
@@ -649,6 +676,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Ratio);
         assert_eq!(report.packages[0].name, "beta"); // has Some(compressed) -> comes first
@@ -668,6 +696,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Ratio);
         assert_eq!(report.packages[0].name, "a"); // all None -> name ascending
@@ -689,6 +718,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Ratio);
         assert_eq!(report.packages[0].name, "alpha"); // 50% (best)
@@ -708,6 +738,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Ratio);
         assert_eq!(report.packages[0].name, "alpha");
@@ -754,6 +785,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.sort(SortField::Real);
         report.truncate(3);
@@ -783,6 +815,7 @@ mod tests {
             permission_errors: 0,
             errors: vec![],
             warnings: vec![],
+            ..Default::default()
         };
         report.truncate(5);
         assert_eq!(report.packages.len(), 5);

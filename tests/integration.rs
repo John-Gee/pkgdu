@@ -271,6 +271,20 @@ fn test_scan_limit() {
 }
 
 #[test]
+fn test_scan_report_totals_are_pre_limit() {
+    let (_tmp, mut config) = create_test_chroot();
+    config.limit = Some(1); // only one row is kept
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    assert_eq!(report.packages.len(), 1);
+    // Totals still cover all matching packages, not just the shown one.
+    assert_eq!(report.total_packages, 3);
+    assert_eq!(report.total_apparent, 5120 + 4096);
+    assert_eq!(report.total_files, 3);
+}
+
+#[test]
 fn test_scan_search_regex() {
     use regex::Regex;
     let (_tmp, mut config) = create_test_chroot();

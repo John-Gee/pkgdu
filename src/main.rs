@@ -60,7 +60,7 @@ fn main() {
             .collect::<Vec<_>>()
             .join(&cfg.delim)
     } else {
-        output::render_table(&report.packages, &cfg)
+        output::render_table(&report, &cfg)
     };
     println!("{}", result);
 

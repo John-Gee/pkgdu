@@ -8,11 +8,14 @@ complementing `expac` with actual filesystem measurements instead of metadata.
 
 ```
 $ pkgdu -H auto --files
-PACKAGE                    REAL      FILES
-linux-firmware        1.2 GiB       2841
-libreoffice-fresh   823.4 MiB        892
-gcc                 412.7 MiB       1043
+PACKAGE                    REAL     PCT   FILES
+linux-firmware        1.2 GiB    14.8%    2841
+libreoffice-fresh   823.4 MiB     7.6%     892
+gcc                 412.7 MiB     3.1%    1043
 ```
+
+`PCT` is each package's share of the total real (or apparent) size of all
+matching packages.
 
 ## Why This Exists
 
@@ -92,7 +95,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `-v, --verbose` | off | Show warnings for missing files, permission errors |
 | `--no-color` | auto | Disable color output (also honors `NO_COLOR`) |
 | `--apparent-size` | — | Show apparent file size instead of disk blocks |
-| `--total` | — | Show total row at the bottom of table |
+| `--total` | — | Show a TOTAL row; when `-n` truncates the list, also a SHOWN subtotal |
 | `--files` | — | Show file count column |
 
 ### Format Tokens
