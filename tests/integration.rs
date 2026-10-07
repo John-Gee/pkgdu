@@ -332,6 +332,27 @@ fn test_dbpath_override_is_not_rebased() {
 }
 
 #[test]
+fn test_scan_hardlinks_counted_once() {
+    let (_tmp, mut config) = create_test_chroot();
+    config.targets = vec!["testpkg".to_string()];
+
+    // Hardlink testbin to a second path and reference both in the manifest.
+    let link = config.root.join("usr/bin/testbin-link");
+    fs::hard_link(config.root.join("usr/bin/testbin"), &link).unwrap();
+    let files_path = config.dbpath.join("local/testpkg-1.0-1/files");
+    let mut manifest = fs::read_to_string(&files_path).unwrap();
+    manifest.push_str("usr/bin/testbin-link\n");
+    fs::write(&files_path, manifest).unwrap();
+
+    let report = scan::scan_packages(&config).unwrap();
+    let pkg = &report.packages[0];
+
+    // The shared inode is counted once: 5120 bytes, 2 files (not 3).
+    assert_eq!(pkg.apparent_size, 5120);
+    assert_eq!(pkg.file_count, 2);
+}
+
+#[test]
 fn test_scan_symlinks_skipped() {
     let (_tmp, mut config) = create_test_chroot();
     config.targets = vec!["testpkg".to_string()];

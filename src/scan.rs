@@ -3,13 +3,19 @@ use crate::config::{Config, SortField};
 use crate::error::Result;
 use crate::pacman::{load_local_db, Filter};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum StatResult {
-    Success(u64, u64),
+    Success {
+        apparent: u64,
+        real: u64,
+        dev: u64,
+        ino: u64,
+    },
     NotFound,
     PermissionDenied,
     Symlink,
@@ -26,7 +32,12 @@ fn stat_file(path: &Path) -> StatResult {
             if meta.file_type().is_symlink() {
                 StatResult::Symlink
             } else {
-                StatResult::Success(meta.len(), meta.blocks() * 512)
+                StatResult::Success {
+                    apparent: meta.len(),
+                    real: meta.blocks() * 512,
+                    dev: meta.dev(),
+                    ino: meta.ino(),
+                }
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatResult::NotFound,
@@ -71,12 +82,13 @@ impl PackageResult {
     }
 }
 
-/// Stat all files of a package entry, collecting sizes and warnings.
 fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, u64, Vec<String>) {
     let mut apparent = 0u64;
     let mut real = 0u64;
     let mut count = 0u64;
     let mut warns: Vec<String> = Vec::new();
+    // Hardlinks within a package share an inode; count each inode only once.
+    let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
     for file_path in &entry.files {
         // Resolve relative paths against root
@@ -96,10 +108,17 @@ fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, 
         }
 
         match stat_file(&full) {
-            StatResult::Success(app, r) => {
-                apparent += app;
-                real += r;
-                count += 1;
+            StatResult::Success {
+                apparent: app,
+                real: r,
+                dev,
+                ino,
+            } => {
+                if seen_inodes.insert((dev, ino)) {
+                    apparent += app;
+                    real += r;
+                    count += 1;
+                }
             }
             StatResult::NotFound => {
                 // Missing file — not an error, skip silently

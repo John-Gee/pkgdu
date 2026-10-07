@@ -101,9 +101,9 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 |-------|-------|--------|
 | `%n` | Package name | `desc` file `%NAME%` |
 | `%v` | Package version | `desc` file `%VERSION%` |
-| `%m` | Real disk usage | `stat() st_blocks * 512` |
-| `%a` | Apparent size | `stat() st_size` |
-| `%f` | File count | regular files successfully stat'd |
+| `%m` | Real disk usage | `stat() st_blocks * 512`; hardlinked inodes counted once |
+| `%a` | Apparent size | `stat() st_size`; hardlinked inodes counted once |
+| `%f` | File count | unique regular files (hardlinked inodes counted once) |
 | `%p` | Metadata size | `desc` file `%SIZE%` |
 | `%z` | btrfs compressed | btrfs extent ioctls (requires `--btrfs`) |
 | `%r` | btrfs ratio | `(compressed / apparent) * 100` |
