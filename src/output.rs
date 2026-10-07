@@ -153,7 +153,9 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
     let has_color = color_enabled(cfg);
     let use_apparent = cfg.apparent_size;
     let size_title = if use_apparent { "APPARENT" } else { "REAL" };
-    let btrfs_active = cfg.btrfs && packages.iter().any(|p| p.btrfs_compressed.is_some());
+    // Show btrfs columns whenever any scanned package has compressed data
+    // (not just the ones currently shown after -n truncation).
+    let btrfs_active = cfg.btrfs && report.total_compressed > 0;
 
     let size_of = |p: &PackageResult| {
         if use_apparent {
