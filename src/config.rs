@@ -40,7 +40,7 @@ pub struct RawArgs {
     #[arg(short = 'n', long)]
     pub limit: Option<usize>,
 
-    /// Enable btrfs compressed size tokens (%z, %r)
+    /// Enable btrfs on-disk size tokens (%z, %r)
     #[arg(long)]
     pub btrfs: bool,
 

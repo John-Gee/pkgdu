@@ -69,7 +69,7 @@ pkgdu -s 'python' -H auto
 # Specific packages with custom format
 pkgdu -H Mi -d $'\t' $'%n\t%m\t%a\t%f' linux glibc gcc
 
-# btrfs compressed sizes (requires root)
+# btrfs on-disk sizes (requires root)
 sudo pkgdu --btrfs -H auto
 
 # Pipe-friendly (no color, raw format)
@@ -88,7 +88,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `-s <regex>` | — | Search packages by regex on name |
 | `--sort <field>` | `real` | Sort by: `name` (ascending A-Z), `real`/`apparent`/`files` (descending), `ratio` (ascending, best compression first) |
 | `-n, --limit <N>` | 20 | Show only top N packages (0 = unlimited) |
-| `--btrfs` | off | Enable btrfs compressed size tokens (`%z`, `%r`) |
+| `--btrfs` | off | Enable btrfs on-disk size tokens (`%z`, `%r`) |
 | `--root <path>` | `/` | Set filesystem root prefix |
 | `--dbpath <path>` | — | Override pacman local DB path (absolute) |
 | `-d <delim>` | `\n` | Delimiter between packages in format mode |
@@ -108,8 +108,8 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `%a` | Apparent size | `stat() st_size`; hardlinked inodes counted once |
 | `%f` | File count | unique regular files (hardlinked inodes counted once) |
 | `%p` | Metadata size | `desc` file `%SIZE%` |
-| `%z` | btrfs compressed | btrfs extent ioctls (requires `--btrfs`) |
-| `%r` | btrfs ratio | `(compressed / apparent) * 100` |
+| `%z` | btrfs on-disk usage | all file extents via btrfs ioctls, compressed or not (requires `--btrfs` + root) |
+| `%r` | btrfs ratio | `(%z / %a) * 100`; 100% = uncompressed |
 | `%%` | Literal `%` | — |
 
 ### Exit Codes
@@ -139,7 +139,7 @@ pkgdu/
     ├── format.rs        # Format string tokenizer and renderer
     ├── human_size.rs    # Byte → human-readable formatting
     ├── output.rs        # Color, table formatting
-    └── btrfs.rs         # btrfs compressed sizes
+    └── btrfs.rs         # btrfs on-disk sizes
 ```
 
 ## Performance

@@ -55,7 +55,7 @@ pub struct PackageResult {
     pub apparent_size: u64,
     pub file_count: u64,
     pub metadata_size: u64,
-    pub btrfs_compressed: Option<u64>,
+    pub btrfs_disk: Option<u64>,
 }
 
 /// Full scan report with metadata about skipped packages and errors.
@@ -71,15 +71,15 @@ pub struct ScanReport {
     pub total_real: u64,
     pub total_apparent: u64,
     pub total_files: u64,
-    pub total_compressed: u64,
+    pub total_disk: u64,
 }
 
 impl PackageResult {
-    /// btrfs compression ratio as a percentage of apparent size, so a smaller
-    /// value means better compression. `None` when compressed data is
-    /// unavailable or apparent size is zero (ratio undefined).
+    /// btrfs on-disk usage as a percentage of apparent size, so a smaller
+    /// value means better compression (100% = uncompressed). `None` when
+    /// btrfs data is unavailable or apparent size is zero (ratio undefined).
     pub fn btrfs_ratio_percent(&self) -> Option<f64> {
-        match self.btrfs_compressed {
+        match self.btrfs_disk {
             Some(compressed) if self.apparent_size > 0 => {
                 Some(compressed as f64 / self.apparent_size as f64 * 100.0)
             }
@@ -177,9 +177,9 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let mut all_warns_count = 0usize;
     let mut all_warns: Vec<String> = Vec::new();
 
-    // Query btrfs compressed sizes if enabled
+    // Query btrfs on-disk sizes if enabled
     let mut btrfs_errors: Vec<String> = Vec::new();
-    let btrfs_compressed: Vec<Option<u64>> = if config.btrfs {
+    let btrfs_disk: Vec<Option<u64>> = if config.btrfs {
         match btrfs::detect_btrfs(&config.root) {
             btrfs::BtrfsStatus::Yes => btrfs::compressed_sizes(&entries, config),
             btrfs::BtrfsStatus::No => {
@@ -226,7 +226,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let packages: Vec<PackageResult> = entries
         .iter()
         .zip(scanned.iter())
-        .zip(btrfs_compressed.iter())
+        .zip(btrfs_disk.iter())
         .map(
             |((entry, (apparent, real, file_count, warns)), &comp)| -> PackageResult {
                 all_warns_count += warns.len();
@@ -239,7 +239,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
                     apparent_size: *apparent,
                     file_count: *file_count,
                     metadata_size: entry.metadata_size,
-                    btrfs_compressed: comp,
+                    btrfs_disk: comp,
                 }
             },
         )
@@ -250,7 +250,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let total_real = packages.iter().map(|p| p.real_size).sum();
     let total_apparent = packages.iter().map(|p| p.apparent_size).sum();
     let total_files = packages.iter().map(|p| p.file_count).sum();
-    let total_compressed = packages.iter().filter_map(|p| p.btrfs_compressed).sum();
+    let total_disk = packages.iter().filter_map(|p| p.btrfs_disk).sum();
 
     let mut result = ScanReport {
         packages,
@@ -267,7 +267,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         total_real,
         total_apparent,
         total_files,
-        total_compressed,
+        total_disk,
     };
 
     if show_progress {
@@ -411,7 +411,7 @@ mod tests {
                     apparent_size: 100,
                     file_count: 1,
                     metadata_size: 50,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -420,7 +420,7 @@ mod tests {
                     apparent_size: 200,
                     file_count: 2,
                     metadata_size: 60,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -429,7 +429,7 @@ mod tests {
                     apparent_size: 50,
                     file_count: 1,
                     metadata_size: 30,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
             ],
@@ -455,7 +455,7 @@ mod tests {
                     apparent_size: 100,
                     file_count: 1,
                     metadata_size: 50,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -464,7 +464,7 @@ mod tests {
                     apparent_size: 200,
                     file_count: 2,
                     metadata_size: 60,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -473,7 +473,7 @@ mod tests {
                     apparent_size: 50,
                     file_count: 1,
                     metadata_size: 30,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
             ],
@@ -499,7 +499,7 @@ mod tests {
                     apparent_size: 500,
                     file_count: 1,
                     metadata_size: 50,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -508,7 +508,7 @@ mod tests {
                     apparent_size: 1000,
                     file_count: 2,
                     metadata_size: 60,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
             ],
@@ -533,7 +533,7 @@ mod tests {
                     apparent_size: 100,
                     file_count: 5,
                     metadata_size: 30,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -542,7 +542,7 @@ mod tests {
                     apparent_size: 500,
                     file_count: 20,
                     metadata_size: 60,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
             ],
@@ -567,7 +567,7 @@ mod tests {
                     apparent_size: 500,
                     file_count: 1,
                     metadata_size: 50,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -576,7 +576,7 @@ mod tests {
                     apparent_size: 100,
                     file_count: 2,
                     metadata_size: 60,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -585,7 +585,7 @@ mod tests {
                     apparent_size: 800,
                     file_count: 3,
                     metadata_size: 30,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
             ],
@@ -611,7 +611,7 @@ mod tests {
                     apparent_size: 200,
                     file_count: 1,
                     metadata_size: 50,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -620,7 +620,7 @@ mod tests {
                     apparent_size: 400,
                     file_count: 2,
                     metadata_size: 60,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
                 PackageResult {
@@ -629,7 +629,7 @@ mod tests {
                     apparent_size: 60,
                     file_count: 3,
                     metadata_size: 30,
-                    btrfs_compressed: None,
+                    btrfs_disk: None,
                     version: "1.0-1".into(),
                 },
             ],
@@ -660,7 +660,7 @@ mod tests {
             apparent_size: apparent,
             file_count: files,
             metadata_size: meta,
-            btrfs_compressed: comp,
+            btrfs_disk: comp,
         }
     }
 
@@ -753,7 +753,7 @@ mod tests {
             make_pkg("a", 100, 200, 1, 0, Some(50)).btrfs_ratio_percent(),
             Some(25.0)
         );
-        // no compressed data
+        // no btrfs data
         assert_eq!(
             make_pkg("a", 100, 200, 1, 0, None).btrfs_ratio_percent(),
             None
@@ -775,7 +775,7 @@ mod tests {
                 apparent_size: i * 10,
                 file_count: i,
                 metadata_size: 10,
-                btrfs_compressed: None,
+                btrfs_disk: None,
             })
             .collect();
 
@@ -805,7 +805,7 @@ mod tests {
                 apparent_size: i * 10,
                 file_count: i,
                 metadata_size: 10,
-                btrfs_compressed: None,
+                btrfs_disk: None,
             })
             .collect();
 

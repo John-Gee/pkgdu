@@ -89,9 +89,9 @@ fn format_pct(value: u64, total: u64) -> String {
     }
 }
 
-/// Sum of compressed sizes over packages that have one.
-fn sum_compressed(pkgs: &[PackageResult]) -> u64 {
-    pkgs.iter().filter_map(|p| p.btrfs_compressed).sum()
+/// Sum of btrfs on-disk sizes over packages that have one.
+fn sum_disk(pkgs: &[PackageResult]) -> u64 {
+    pkgs.iter().filter_map(|p| p.btrfs_disk).sum()
 }
 
 /// Compression ratio for a subtotal, as compressed/apparent * 100.
@@ -107,7 +107,7 @@ fn subtotal_ratio(compressed: u64, apparent: u64) -> Option<f64> {
 struct Row {
     name: String,
     size: u64,
-    compressed: Option<u64>,
+    disk: Option<u64>,
     files: u64,
     ratio: Option<f64>,
 }
@@ -153,9 +153,9 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
     let has_color = color_enabled(cfg);
     let use_apparent = cfg.apparent_size;
     let size_title = if use_apparent { "APPARENT" } else { "REAL" };
-    // Show btrfs columns whenever any scanned package has compressed data
+    // Show btrfs columns whenever any scanned package has on-disk data
     // (not just the ones currently shown after -n truncation).
-    let btrfs_active = cfg.btrfs && report.total_compressed > 0;
+    let btrfs_active = cfg.btrfs && report.total_disk > 0;
 
     let size_of = |p: &PackageResult| {
         if use_apparent {
@@ -189,7 +189,7 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
     ];
     if btrfs_active {
         cols.push(Column {
-            title: "COMPRESSED",
+            title: "DISK",
             width: 0,
             right_align: true,
         });
@@ -222,7 +222,7 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
         .map(|p| Row {
             name: p.name.clone(),
             size: size_of(p),
-            compressed: p.btrfs_compressed,
+            disk: p.btrfs_disk,
             files: p.file_count,
             ratio: p.btrfs_ratio_percent(),
         })
@@ -232,11 +232,11 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
     if cfg.total {
         if packages.len() < report.total_packages {
             let shown_apparent: u64 = packages.iter().map(|p| p.apparent_size).sum();
-            let shown_compressed = sum_compressed(packages);
+            let shown_compressed = sum_disk(packages);
             rows.push(Row {
                 name: format!("SHOWN (top {})", packages.len()),
                 size: rows.iter().map(|r| r.size).sum(),
-                compressed: if btrfs_active {
+                disk: if btrfs_active {
                     Some(shown_compressed)
                 } else {
                     None
@@ -248,13 +248,13 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
         rows.push(Row {
             name: "TOTAL".to_string(),
             size: grand_total,
-            compressed: if btrfs_active {
-                Some(report.total_compressed)
+            disk: if btrfs_active {
+                Some(report.total_disk)
             } else {
                 None
             },
             files: report.total_files,
-            ratio: subtotal_ratio(report.total_compressed, report.total_apparent),
+            ratio: subtotal_ratio(report.total_disk, report.total_apparent),
         });
     }
 
@@ -266,7 +266,7 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
         ];
         if btrfs_active {
             cells.push((
-                row.compressed
+                row.disk
                     .map(|c| format_field_size(c, cfg.humansize))
                     .unwrap_or_else(|| "N/A".to_string()),
                 Style::Cyan,
@@ -316,7 +316,7 @@ mod tests {
                 apparent_size: 3_456_789_123,
                 file_count: 150,
                 metadata_size: 2_697_614_592,
-                btrfs_compressed: None,
+                btrfs_disk: None,
             },
             PackageResult {
                 name: "firefox".to_string(),
@@ -325,7 +325,7 @@ mod tests {
                 apparent_size: 1_200_000_000,
                 file_count: 400,
                 metadata_size: 863_200_000,
-                btrfs_compressed: Some(621_504_000),
+                btrfs_disk: Some(621_504_000),
             },
             PackageResult {
                 name: "bash".to_string(),
@@ -334,7 +334,7 @@ mod tests {
                 apparent_size: 80_000_000,
                 file_count: 30,
                 metadata_size: 50_000_000,
-                btrfs_compressed: None,
+                btrfs_disk: None,
             },
         ]
     }
@@ -344,14 +344,14 @@ mod tests {
         let total_real = pkgs.iter().map(|p| p.real_size).sum();
         let total_apparent = pkgs.iter().map(|p| p.apparent_size).sum();
         let total_files = pkgs.iter().map(|p| p.file_count).sum();
-        let total_compressed = pkgs.iter().filter_map(|p| p.btrfs_compressed).sum();
+        let total_disk = pkgs.iter().filter_map(|p| p.btrfs_disk).sum();
         ScanReport {
             packages: pkgs,
             total_packages,
             total_real,
             total_apparent,
             total_files,
-            total_compressed,
+            total_disk,
             ..Default::default()
         }
     }
@@ -427,7 +427,7 @@ mod tests {
         let pkgs = sample_packages();
         let cfg = make_config(true);
         let result = render_table(&report_of(pkgs), &cfg);
-        assert!(result.contains("COMPRESSED"));
+        assert!(result.contains("DISK"));
         assert!(result.contains("RATIO"));
         assert!(!result.contains("FILES"));
     }
@@ -438,7 +438,7 @@ mod tests {
         let mut cfg = make_config(true);
         cfg.files = true;
         let result = render_table(&report_of(pkgs), &cfg);
-        assert!(result.contains("COMPRESSED"));
+        assert!(result.contains("DISK"));
         assert!(result.contains("RATIO"));
         assert!(result.contains("FILES"));
     }
@@ -479,10 +479,10 @@ mod tests {
         // Compressed data exists in the grand total even though the shown
         // package has none (e.g. -n hid the compressed packages).
         let mut report = report_of(sample_packages());
-        report.packages.truncate(1); // zlib, btrfs_compressed: None
+        report.packages.truncate(1); // zlib, btrfs_disk: None
         let cfg = make_config(true);
         let result = render_table(&report, &cfg);
-        assert!(result.contains("COMPRESSED"), "got:\n{result}");
+        assert!(result.contains("DISK"), "got:\n{result}");
         assert!(result.contains("RATIO"));
     }
 }

@@ -64,7 +64,7 @@ impl FormatString {
                     FormatToken::MetaSize => result.push_str(&format_size(pkg.metadata_size, unit)),
                     FormatToken::BtrfsSize => {
                         if cfg.btrfs {
-                            match pkg.btrfs_compressed {
+                            match pkg.btrfs_disk {
                                 Some(s) => result.push_str(&format_size(s, unit)),
                                 None => result.push_str("N/A"),
                             }
@@ -281,7 +281,7 @@ mod tests {
             apparent_size: 2_048,
             file_count: 3,
             metadata_size: 4_096,
-            btrfs_compressed: None,
+            btrfs_disk: None,
         }
     }
 
