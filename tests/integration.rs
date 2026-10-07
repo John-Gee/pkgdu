@@ -298,6 +298,27 @@ fn test_scan_sort_by_real() {
 }
 
 #[test]
+fn test_scan_symlinks_skipped() {
+    let (_tmp, mut config) = create_test_chroot();
+    config.targets = vec!["testpkg".to_string()];
+
+    // Add a symlink under the root and reference it from testpkg's manifest.
+    let link = config.root.join("usr/lib/testlink.so");
+    std::os::unix::fs::symlink("testlib.so", &link).unwrap();
+    let files_path = config.dbpath.join("local/testpkg-1.0-1/files");
+    let mut manifest = fs::read_to_string(&files_path).unwrap();
+    manifest.push_str("usr/lib/testlink.so\n");
+    fs::write(&files_path, manifest).unwrap();
+
+    let report = scan::scan_packages(&config).unwrap();
+    let pkg = &report.packages[0];
+
+    // The symlink must not contribute size or count.
+    assert_eq!(pkg.apparent_size, 5120);
+    assert_eq!(pkg.file_count, 2);
+}
+
+#[test]
 fn test_scan_malformed_desc_is_reported_and_counted() {
     let (_tmp, config) = create_test_chroot();
 

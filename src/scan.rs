@@ -2,8 +2,10 @@ use crate::btrfs;
 use crate::config::{Config, SortField};
 use crate::error::Result;
 use crate::pacman::{load_local_db, Filter};
+use rayon::prelude::*;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum StatResult {
@@ -15,19 +17,17 @@ enum StatResult {
 
 fn stat_file(path: &Path) -> StatResult {
     use std::os::unix::fs::MetadataExt;
-    use std::{fs::metadata, fs::symlink_metadata};
 
-    if let Ok(meta) = symlink_metadata(path) {
-        if meta.file_type().is_symlink() {
-            return StatResult::Symlink;
-        }
-    }
-
-    match metadata(path) {
+    // A single lstat is enough: for a regular file, lstat's st_size/st_blocks
+    // are exactly what stat would return, and it also lets us detect symlinks
+    // without a second syscall.
+    match std::fs::symlink_metadata(path) {
         Ok(meta) => {
-            let apparent = meta.len();
-            let real = meta.blocks() * 512;
-            StatResult::Success(apparent, real)
+            if meta.file_type().is_symlink() {
+                StatResult::Symlink
+            } else {
+                StatResult::Success(meta.len(), meta.blocks() * 512)
+            }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatResult::NotFound,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => StatResult::PermissionDenied,
@@ -128,7 +128,7 @@ fn resolve_dbpath(config: &Config) -> PathBuf {
         config.dbpath.clone()
     }
 }
-/// Run scan (serial version for correctness verification).
+/// Run a full scan over the configured package set.
 pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let dbpath = resolve_dbpath(config);
 
@@ -182,44 +182,49 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         vec![None; entries.len()]
     };
 
-    // Progress indicator: show current package being scanned
+    // Stat all files of all packages in parallel. rayon's `collect` preserves
+    // the order of `entries`, so output stays deterministic before sorting.
     let show_progress = std::io::stderr().is_terminal();
     let total_entries = entries.len();
+    let progress = AtomicUsize::new(0);
 
-    // Build scan report
+    let scanned: Vec<(u64, u64, u64, Vec<String>)> = entries
+        .par_iter()
+        .map(|entry| {
+            let stat = stat_package(entry, &config.root);
+            if show_progress {
+                let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % 128 == 0 || done == total_entries {
+                    eprint!("\r\x1B[KScanning ({}/{})...", done, total_entries);
+                    let _ = std::io::stderr().flush();
+                }
+            }
+            stat
+        })
+        .collect();
+
+    // Build scan report (sequential; combines parallel results in entry order)
     let mut result = ScanReport {
         packages: entries
             .iter()
+            .zip(scanned.iter())
             .zip(btrfs_compressed.iter())
-            .enumerate()
-            .map(|(i, (entry, &comp))| -> PackageResult {
-                if show_progress {
-                    eprint!(
-                        "\r\x1B[KScanning {} ({}/{})...",
-                        entry.name,
-                        i + 1,
-                        total_entries
-                    );
-                    let _ = std::io::stderr().flush();
-                }
+            .map(
+                |((entry, (apparent, real, file_count, warns)), &comp)| -> PackageResult {
+                    all_warns_count += warns.len();
+                    all_warns.extend(warns.iter().cloned());
 
-                let (apparent, real, file_count, warns) = stat_package(entry, &config.root);
-
-                for w in &warns {
-                    all_warns_count += 1;
-                    all_warns.push(w.clone());
-                }
-
-                PackageResult {
-                    name: entry.name.clone(),
-                    version: entry.version.clone(),
-                    real_size: real,
-                    apparent_size: apparent,
-                    file_count,
-                    metadata_size: entry.metadata_size,
-                    btrfs_compressed: comp,
-                }
-            })
+                    PackageResult {
+                        name: entry.name.clone(),
+                        version: entry.version.clone(),
+                        real_size: *real,
+                        apparent_size: *apparent,
+                        file_count: *file_count,
+                        metadata_size: entry.metadata_size,
+                        btrfs_compressed: comp,
+                    }
+                },
+            )
             .collect(),
         skipped_packages: skipped,
         permission_errors: all_warns_count,
