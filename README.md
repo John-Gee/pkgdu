@@ -105,7 +105,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `%a` | Apparent size | `stat() st_size` |
 | `%f` | File count | regular files successfully stat'd |
 | `%p` | Metadata size | `desc` file `%SIZE%` |
-| `%z` | btrfs compressed | compsize (requires `--btrfs`) |
+| `%z` | btrfs compressed | btrfs extent ioctls (requires `--btrfs`) |
 | `%r` | btrfs ratio | `(compressed / apparent) * 100` |
 | `%%` | Literal `%` | — |
 
