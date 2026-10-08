@@ -118,6 +118,9 @@ Package with zero files
         apparent_size: false,
         total: false,
         files: false,
+        depth: None,
+        breadth: 5,
+        min_percent: 0.0,
     };
 
     (tmp, config)
@@ -407,5 +410,32 @@ fn test_scan_malformed_desc_is_reported_and_counted() {
             .any(|e| e.contains("badpkg") && e.contains("Malformed")),
         "expected a malformed-desc diagnostic, got: {:?}",
         report.errors
+    );
+}
+
+#[test]
+fn test_scan_builds_trees_when_depth_set() {
+    let (_tmp, mut config) = create_test_chroot();
+    config.depth = Some(2);
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    // One tree per shown package.
+    assert_eq!(report.trees.len(), report.packages.len());
+
+    // testpkg owns usr/lib/testlib.so and usr/bin/testbin; the common `usr`
+    // prefix is stripped, so the top level is lib/bin.
+    let tree = report.trees.iter().find(|t| t.name == "testpkg").unwrap();
+    let mut names: Vec<&str> = tree.nodes.iter().map(|n| n.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["bin", "lib"]);
+    assert_eq!(
+        tree.size,
+        report
+            .packages
+            .iter()
+            .find(|p| p.name == "testpkg")
+            .unwrap()
+            .real_size
     );
 }

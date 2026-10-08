@@ -302,6 +302,9 @@ mod tests {
             apparent_size: false,
             total: false,
             files: false,
+            depth: None,
+            breadth: 5,
+            min_percent: 0.0,
         }
     }
 

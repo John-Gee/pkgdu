@@ -2,8 +2,9 @@ use crate::btrfs;
 use crate::config::{Config, SortField};
 use crate::error::Result;
 use crate::pacman::{load_local_db, Filter};
+use crate::tree::{build_package_tree, PackageTree};
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,6 +73,8 @@ pub struct ScanReport {
     pub total_apparent: u64,
     pub total_files: u64,
     pub total_disk: u64,
+    /// Per-package file trees for the shown packages (empty unless the tree view is on).
+    pub trees: Vec<PackageTree>,
 }
 
 impl PackageResult {
@@ -88,15 +91,36 @@ impl PackageResult {
     }
 }
 
-fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, u64, Vec<String>) {
+/// Result of stat-ing one package: aggregates plus optional per-file sizes.
+struct PkgStat {
+    apparent: u64,
+    real: u64,
+    count: u64,
+    warns: Vec<String>,
+    /// Per-file attributed bytes, aligned with `PackageEntry.files`; empty
+    /// unless per-file sizes were requested (tree view).
+    sizes: Vec<u64>,
+}
+
+fn stat_package(
+    entry: &crate::pacman::PackageEntry,
+    root: &Path,
+    collect_sizes: bool,
+    use_apparent: bool,
+) -> PkgStat {
     let mut apparent = 0u64;
     let mut real = 0u64;
     let mut count = 0u64;
     let mut warns: Vec<String> = Vec::new();
+    let mut sizes = if collect_sizes {
+        vec![0u64; entry.files.len()]
+    } else {
+        Vec::new()
+    };
     // Hardlinks within a package share an inode; count each inode only once.
     let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
-    for file_path in &entry.files {
+    for (i, file_path) in entry.files.iter().enumerate() {
         // Resolve relative paths against root
         let full = if file_path.is_absolute() {
             file_path.to_path_buf()
@@ -124,6 +148,9 @@ fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, 
                     apparent += app;
                     real += r;
                     count += 1;
+                    if collect_sizes {
+                        sizes[i] = if use_apparent { app } else { r };
+                    }
                 }
             }
             StatResult::NotFound => {
@@ -141,7 +168,13 @@ fn stat_package(entry: &crate::pacman::PackageEntry, root: &Path) -> (u64, u64, 
         }
     }
 
-    (apparent, real, count, warns)
+    PkgStat {
+        apparent,
+        real,
+        count,
+        warns,
+        sizes,
+    }
 }
 
 /// Run a full scan over the configured package set.
@@ -207,10 +240,12 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let total_entries = entries.len();
     let progress = AtomicUsize::new(0);
 
-    let scanned: Vec<(u64, u64, u64, Vec<String>)> = entries
+    let collect_sizes = config.depth.is_some();
+    let use_apparent = config.apparent_size;
+    let scanned: Vec<PkgStat> = entries
         .par_iter()
         .map(|entry| {
-            let stat = stat_package(entry, &config.root);
+            let stat = stat_package(entry, &config.root, collect_sizes, use_apparent);
             if show_progress {
                 let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
                 if done % 128 == 0 || done == total_entries {
@@ -227,22 +262,20 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         .iter()
         .zip(scanned.iter())
         .zip(btrfs_disk.iter())
-        .map(
-            |((entry, (apparent, real, file_count, warns)), &comp)| -> PackageResult {
-                all_warns_count += warns.len();
-                all_warns.extend(warns.iter().cloned());
+        .map(|((entry, stat), &comp)| -> PackageResult {
+            all_warns_count += stat.warns.len();
+            all_warns.extend(stat.warns.iter().cloned());
 
-                PackageResult {
-                    name: entry.name.clone(),
-                    version: entry.version.clone(),
-                    real_size: *real,
-                    apparent_size: *apparent,
-                    file_count: *file_count,
-                    metadata_size: entry.metadata_size,
-                    btrfs_disk: comp,
-                }
-            },
-        )
+            PackageResult {
+                name: entry.name.clone(),
+                version: entry.version.clone(),
+                real_size: stat.real,
+                apparent_size: stat.apparent,
+                file_count: stat.count,
+                metadata_size: entry.metadata_size,
+                btrfs_disk: comp,
+            }
+        })
         .collect();
 
     // Grand totals over all matching packages (before `limit`).
@@ -268,6 +301,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         total_apparent,
         total_files,
         total_disk,
+        trees: Vec::new(),
     };
 
     if show_progress {
@@ -281,6 +315,35 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     // Apply limit
     if let Some(limit) = config.limit {
         result.truncate(limit);
+    }
+
+    // Build per-package file trees for the shown packages (tree view).
+    if collect_sizes {
+        let index_by_name: HashMap<&str, usize> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.name.as_str(), i))
+            .collect();
+        result.trees = result
+            .packages
+            .iter()
+            .filter_map(|pkg| {
+                let idx = *index_by_name.get(pkg.name.as_str())?;
+                let sizes = &scanned[idx].sizes;
+                let files: Vec<(std::path::PathBuf, u64)> = entries[idx]
+                    .files
+                    .iter()
+                    .cloned()
+                    .zip(sizes.iter().copied())
+                    .collect();
+                let total = if use_apparent {
+                    pkg.apparent_size
+                } else {
+                    pkg.real_size
+                };
+                Some(build_package_tree(&pkg.name, total, &files))
+            })
+            .collect();
     }
 
     Ok(result)
@@ -356,7 +419,8 @@ mod tests {
             metadata_size: 0,
             files: vec![],
         };
-        let (apparent, real, count, warns) = stat_package(&entry, Path::new("/"));
+        let s = stat_package(&entry, Path::new("/"), false, false);
+        let (apparent, real, count, warns) = (s.apparent, s.real, s.count, s.warns);
         assert_eq!(apparent, 0);
         assert_eq!(real, 0);
         assert_eq!(count, 0);
@@ -376,7 +440,8 @@ mod tests {
             metadata_size: 100,
             files: vec![tmpfile.clone()],
         };
-        let (apparent, real, count, warns) = stat_package(&entry, Path::new("/"));
+        let s = stat_package(&entry, Path::new("/"), false, false);
+        let (apparent, real, count, warns) = (s.apparent, s.real, s.count, s.warns);
         assert_eq!(apparent, 11); // "hello world" = 11 bytes
         assert!(real >= apparent); // F4: real size via blocks(512) is always >= apparent
         assert_eq!(count, 1);
@@ -394,7 +459,8 @@ mod tests {
             metadata_size: 50,
             files: vec![PathBuf::from("/tmp/pkgdu_nonexistent_file_12345.txt")],
         };
-        let (apparent, real, count, warns) = stat_package(&entry, Path::new("/"));
+        let s = stat_package(&entry, Path::new("/"), false, false);
+        let (apparent, real, count, warns) = (s.apparent, s.real, s.count, s.warns);
         assert_eq!(apparent, 0);
         assert_eq!(real, 0);
         assert_eq!(count, 0);
@@ -844,7 +910,8 @@ mod tests {
             metadata_size: 42,
             files: vec![marker.clone()],
         };
-        let (apparent, real, count, _warns) = stat_package(&entry, Path::new("/"));
+        let s = stat_package(&entry, Path::new("/"), false, false);
+        let (apparent, real, count, _warns) = (s.apparent, s.real, s.count, s.warns);
         assert_eq!(apparent, 0);
         assert_eq!(real, 0);
         assert_eq!(count, 0);

@@ -59,6 +59,8 @@ fn main() {
             .map(|pkg| fmt.render(pkg, &cfg))
             .collect::<Vec<_>>()
             .join(&cfg.delim)
+    } else if cfg.depth.is_some() {
+        output::render_tree(&report, &cfg)
     } else {
         output::render_table(&report, &cfg)
     };

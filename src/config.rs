@@ -75,6 +75,22 @@ pub struct RawArgs {
     /// Show file count column
     #[arg(long)]
     pub files: bool,
+
+    /// Show a per-package file/dir tree (default depth 1)
+    #[arg(long)]
+    pub tree: bool,
+
+    /// Tree depth in levels (implies --tree; default 1)
+    #[arg(long)]
+    pub depth: Option<usize>,
+
+    /// Show at most K children per directory (0 = no limit)
+    #[arg(long, default_value_t = 5)]
+    pub breadth: usize,
+
+    /// Prune entries below this percentage of their parent (default 0.1 with --tree)
+    #[arg(long)]
+    pub min_percent: Option<f64>,
 }
 
 /// Final CLI configuration — built from RawArgs + validation.
@@ -94,6 +110,12 @@ pub struct Config {
     pub apparent_size: bool,
     pub total: bool,
     pub files: bool,
+    /// Tree view depth (None = flat table).
+    pub depth: Option<usize>,
+    /// Max children shown per tree directory (0 = no limit).
+    pub breadth: usize,
+    /// Prune entries below this % of their parent (0.0 = no pruning).
+    pub min_percent: f64,
 }
 
 /// Rebase an absolute path from the target system onto `root`, e.g.
@@ -240,6 +262,26 @@ impl RawArgs {
             None => Some(UnitSpec::Auto),
         };
 
+        // 8. --- Tree view ---
+        // --tree enables the tree (--depth implies it); --min-percent
+        // defaults to 0.1 with the tree.
+        // (dirstat-rs parity) and 0.0 (off) otherwise.
+        let depth = if self.tree || self.depth.is_some() {
+            Some(self.depth.unwrap_or(1))
+        } else {
+            None
+        };
+        let min_percent = match self.min_percent {
+            Some(p) if !(0.0..=100.0).contains(&p) => {
+                return Err(PkgduError::Config(
+                    "--min-percent must be between 0 and 100".to_string(),
+                ));
+            }
+            Some(p) => p,
+            None if depth.is_some() => 0.1,
+            None => 0.0,
+        };
+
         Ok(Config {
             root: self.root,
             dbpath,
@@ -256,6 +298,9 @@ impl RawArgs {
             apparent_size: self.apparent_size,
             total: self.total,
             files: self.files,
+            depth,
+            breadth: self.breadth,
+            min_percent,
         })
     }
 }
@@ -435,5 +480,39 @@ mod tests {
         let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu"]);
         let config = raw.into_config().unwrap();
         assert_eq!(config.limit, Some(20));
+    }
+
+    #[test]
+    fn test_tree_defaults_to_depth_1_and_enables_pruning() {
+        // --tree enables the view and does not swallow a positional target.
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--tree", "glibc"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.depth, Some(1));
+        assert_eq!(config.breadth, 5);
+        assert_eq!(config.min_percent, 0.1);
+        assert_eq!(config.targets, vec!["glibc".to_string()]);
+    }
+
+    #[test]
+    fn test_depth_implies_tree_and_is_explicit() {
+        let raw =
+            <RawArgs as clap::Parser>::parse_from(["pkgdu", "--depth", "4", "--min-percent", "2"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.depth, Some(4));
+        assert_eq!(config.min_percent, 2.0);
+    }
+
+    #[test]
+    fn test_no_depth_means_no_pruning() {
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu"]);
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.depth, None);
+        assert_eq!(config.min_percent, 0.0);
+    }
+
+    #[test]
+    fn test_min_percent_out_of_range_is_error() {
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--min-percent", "150"]);
+        assert!(raw.into_config().is_err());
     }
 }

@@ -74,6 +74,9 @@ sudo pkgdu --btrfs -H auto
 # a full --btrfs scan sweeps the filesystem's extents once; naming packages
 # reads only those files
 
+# Expand the biggest packages into their file/dir trees
+pkgdu --tree --depth 3 --min-percent 1
+
 # Pipe-friendly (no color, raw format)
 pkgdu -H Mi "%n\t%m" | sort -k2 -rn | head -5
 
@@ -99,6 +102,10 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `--apparent-size` | — | Show apparent file size instead of disk blocks |
 | `--total` | — | Show a TOTAL row; when `-n` truncates the list, also a SHOWN subtotal |
 | `--files` | — | Show file count column |
+| `--tree` | off | Expand each shown package into a file/dir tree (default depth 1) |
+| `--depth <N>` | 1 (with `--tree`) | Tree depth in levels; implies `--tree` |
+| `--breadth <K>` | 5 | Show at most K children per tree directory (0 = no limit) |
+| `--min-percent <P>` | 0.1 with `--tree` | Hide tree entries below P% of their parent |
 
 ### Format Tokens
 

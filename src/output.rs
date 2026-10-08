@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::human_size::{format_size, UnitSpec};
 
 use crate::scan::{PackageResult, ScanReport};
+use crate::tree::TreeNode;
 
 use std::io::IsTerminal;
 use unicode_width::UnicodeWidthStr;
@@ -303,6 +304,167 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
     out.join("\n")
 }
 
+/// One rendered line of the tree view.
+struct TreeLine {
+    level: usize,
+    name: String,
+    size: u64,
+    pct: f64,
+}
+
+/// Percentage string for an already-computed fraction.
+fn pct_string(pct: f64) -> String {
+    if pct > 0.0 && pct < 0.1 {
+        "<0.1%".to_string()
+    } else {
+        format!("{:.1}%", pct)
+    }
+}
+
+fn add_tree_nodes(
+    nodes: &[TreeNode],
+    parent_size: u64,
+    level: usize,
+    max_depth: usize,
+    breadth: usize,
+    min_percent: f64,
+    out: &mut Vec<TreeLine>,
+) {
+    if level > max_depth {
+        return;
+    }
+
+    let pct_of = |size: u64| {
+        if parent_size > 0 {
+            size as f64 / parent_size as f64 * 100.0
+        } else {
+            0.0
+        }
+    };
+
+    // Prune tiny entries, then keep only the biggest `breadth` (nodes are
+    // already sorted by size descending).
+    let visible: Vec<&TreeNode> = nodes
+        .iter()
+        .filter(|n| !(min_percent > 0.0 && pct_of(n.size) < min_percent))
+        .collect();
+    let limit = if breadth == 0 {
+        visible.len()
+    } else {
+        breadth.min(visible.len())
+    };
+    let (shown, hidden) = visible.split_at(limit);
+
+    for node in shown {
+        out.push(TreeLine {
+            level,
+            name: node.name.clone(),
+            size: node.size,
+            pct: pct_of(node.size),
+        });
+        if node.is_dir {
+            add_tree_nodes(
+                &node.children,
+                node.size,
+                level + 1,
+                max_depth,
+                breadth,
+                min_percent,
+                out,
+            );
+        }
+    }
+
+    if !hidden.is_empty() {
+        let sum: u64 = hidden.iter().map(|n| n.size).sum();
+        out.push(TreeLine {
+            level,
+            name: format!("… {} more", hidden.len()),
+            size: sum,
+            pct: pct_of(sum),
+        });
+    }
+}
+
+/// Render the tree view (`--tree`): packages, each expanded into a file/dir
+/// tree. Package rows show % of the grand total; child rows show % of parent.
+pub fn render_tree(report: &ScanReport, cfg: &Config) -> String {
+    use owo_colors::OwoColorize;
+
+    let has_color = color_enabled(cfg);
+    let grand_total = if cfg.apparent_size {
+        report.total_apparent
+    } else {
+        report.total_real
+    };
+    let depth = cfg.depth.unwrap_or(0);
+
+    let mut lines: Vec<TreeLine> = Vec::new();
+    for tree in &report.trees {
+        let pct = if grand_total > 0 {
+            tree.size as f64 / grand_total as f64 * 100.0
+        } else {
+            0.0
+        };
+        lines.push(TreeLine {
+            level: 0,
+            name: tree.name.clone(),
+            size: tree.size,
+            pct,
+        });
+        add_tree_nodes(
+            &tree.nodes,
+            tree.size,
+            1,
+            depth,
+            cfg.breadth,
+            cfg.min_percent,
+            &mut lines,
+        );
+    }
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let size_strs: Vec<String> = lines
+        .iter()
+        .map(|l| format_field_size(l.size, cfg.humansize))
+        .collect();
+    let pct_strs: Vec<String> = lines.iter().map(|l| pct_string(l.pct)).collect();
+
+    let size_w = size_strs
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.as_str()))
+        .max()
+        .unwrap_or(0);
+    let pct_w = pct_strs
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.as_str()))
+        .max()
+        .unwrap_or(0);
+
+    let mut out = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let name_cell = format!("{}{}", "  ".repeat(line.level), line.name);
+        let size_cell = format!("{:>w$}", size_strs[i], w = size_w);
+        let pct_cell = format!("{:>w$}", pct_strs[i], w = pct_w);
+
+        let name_cell = if has_color && line.level == 0 {
+            name_cell.bold().to_string()
+        } else {
+            name_cell
+        };
+        let size_cell = if has_color {
+            size_cell.cyan().to_string()
+        } else {
+            size_cell
+        };
+        out.push(format!("{}  {}  {}", name_cell, size_cell, pct_cell));
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +535,9 @@ mod tests {
             apparent_size: false,
             total: false,
             files: false,
+            depth: None,
+            breadth: 5,
+            min_percent: 0.0,
         }
     }
 
@@ -484,5 +649,97 @@ mod tests {
         let result = render_table(&report, &cfg);
         assert!(result.contains("DISK"), "got:\n{result}");
         assert!(result.contains("RATIO"));
+    }
+
+    fn tree_report() -> ScanReport {
+        use crate::tree::{PackageTree, TreeNode};
+        ScanReport {
+            total_real: 100,
+            total_apparent: 100,
+            trees: vec![PackageTree {
+                name: "pkg".to_string(),
+                size: 100,
+                nodes: vec![
+                    TreeNode {
+                        name: "lib".to_string(),
+                        size: 60,
+                        is_dir: true,
+                        children: vec![TreeNode {
+                            name: "a.so".to_string(),
+                            size: 60,
+                            is_dir: false,
+                            children: vec![],
+                        }],
+                    },
+                    TreeNode {
+                        name: "etc".to_string(),
+                        size: 40,
+                        is_dir: false,
+                        children: vec![],
+                    },
+                ],
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_render_tree_shows_packages_and_children() {
+        let mut cfg = make_config(false);
+        cfg.depth = Some(2);
+        let out = render_tree(&tree_report(), &cfg);
+        assert!(out.contains("pkg"), "got:\n{out}");
+        assert!(out.contains("lib"));
+        assert!(out.contains("a.so"));
+        assert!(out.contains("etc"));
+        // lib is 60% of the package; a.so is 100% of lib.
+        assert!(out.contains("60.0%"));
+        assert!(out.contains("100.0%"));
+    }
+
+    #[test]
+    fn test_render_tree_depth_limit_and_pruning() {
+        let mut cfg = make_config(false);
+        cfg.depth = Some(1); // children only, no grandchildren
+        let out = render_tree(&tree_report(), &cfg);
+        assert!(out.contains("lib"));
+        assert!(!out.contains("a.so"));
+
+        let mut cfg = make_config(false);
+        cfg.depth = Some(2);
+        cfg.min_percent = 50.0; // drop `etc` (40%)
+        let out = render_tree(&tree_report(), &cfg);
+        assert!(out.contains("lib"));
+        assert!(!out.contains("etc"));
+    }
+
+    #[test]
+    fn test_render_tree_breadth_cap_shows_summary() {
+        use crate::tree::{PackageTree, TreeNode};
+        let nodes: Vec<TreeNode> = (0..8)
+            .map(|i| TreeNode {
+                name: format!("d{i}"),
+                size: 100 - i,
+                is_dir: false,
+                children: vec![],
+            })
+            .collect();
+        let report = ScanReport {
+            total_real: 100,
+            trees: vec![PackageTree {
+                name: "pkg".to_string(),
+                size: 100,
+                nodes,
+            }],
+            ..Default::default()
+        };
+        let mut cfg = make_config(false);
+        cfg.depth = Some(1);
+        cfg.breadth = 3;
+        cfg.min_percent = 0.0;
+        let out = render_tree(&report, &cfg);
+        assert!(out.contains("d0") && out.contains("d1") && out.contains("d2"));
+        assert!(!out.contains("d3"));
+        assert!(out.contains("… 5 more"), "got:\n{out}");
     }
 }
