@@ -71,6 +71,8 @@ pkgdu -H Mi -d $'\t' $'%n\t%m\t%a\t%f' linux glibc gcc
 
 # btrfs on-disk sizes (requires root)
 sudo pkgdu --btrfs -H auto
+# a full --btrfs scan sweeps the filesystem's extents once; naming packages
+# reads only those files
 
 # Pipe-friendly (no color, raw format)
 pkgdu -H Mi "%n\t%m" | sort -k2 -rn | head -5
