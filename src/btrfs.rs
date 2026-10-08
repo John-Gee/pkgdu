@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use btrfs_disk::items::{FileExtentBody, FileExtentItem};
 use btrfs_uapi::raw::BTRFS_EXTENT_DATA_KEY;
 use btrfs_uapi::tree_search::{tree_search_v2, SearchFilter};
+use rayon::prelude::*;
 
 use crate::config::Config;
 use crate::pacman::PackageEntry;
@@ -167,6 +168,9 @@ fn sum_package_files(
 }
 
 /// Sweep-based sizes for a full scan.
+///
+/// The extent sweep itself is serial (the ioctl serialises), but the
+/// per-package summation is just `stat` + map lookups and is parallelised.
 fn sweep_sizes(
     entries: &[PackageEntry],
     config: &Config,
@@ -174,7 +178,7 @@ fn sweep_sizes(
 ) -> Vec<Option<u64>> {
     let root_dev = std::fs::metadata(&config.root).ok().map(|m| m.dev());
     entries
-        .iter()
+        .par_iter()
         .map(|entry| sum_package_files(&entry.files, &config.root, root_dev, map))
         .collect()
 }
