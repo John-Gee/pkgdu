@@ -62,13 +62,22 @@ pub fn compressed_sizes(entries: &[PackageEntry], config: &Config) -> Vec<Option
     }
 }
 
+/// Extents recorded for one inode during a sweep.
+#[derive(Default)]
+struct InodeExtents {
+    /// Total inline (in-tree) data size.
+    inline: u64,
+    /// `(disk_bytenr, disk_num_bytes)` for each non-hole regular extent.
+    extents: Vec<(u64, u64)>,
+}
+
 /// One pass over the subvolume's `EXTENT_DATA` items, producing
-/// `inode -> on-disk bytes` (holes skipped, inline counted). `None` if the
-/// sweep fails.
-fn build_inode_map(root: &Path) -> Option<HashMap<u64, u64>> {
+/// `inode -> extents` (holes recorded as an empty entry, inline counted).
+/// `None` if the sweep fails.
+fn build_inode_map(root: &Path) -> Option<HashMap<u64, InodeExtents>> {
     let file = File::open(root).ok()?;
     let filter = SearchFilter::for_type(0, BTRFS_EXTENT_DATA_KEY);
-    let mut map: HashMap<u64, u64> = HashMap::new();
+    let mut map: HashMap<u64, InodeExtents> = HashMap::new();
     let res = tree_search_v2(
         file.as_fd(),
         filter,
@@ -78,22 +87,20 @@ fn build_inode_map(root: &Path) -> Option<HashMap<u64, u64>> {
             // extent-data items.
             if hdr.item_type == BTRFS_EXTENT_DATA_KEY {
                 if let Some(extent) = FileExtentItem::parse(data) {
-                    let bytes = match &extent.body {
+                    let entry = map.entry(hdr.objectid).or_default();
+                    match &extent.body {
                         FileExtentBody::Regular {
                             disk_bytenr,
                             disk_num_bytes,
                             ..
                         } => {
-                            if *disk_bytenr == 0 {
-                                0 // hole
-                            } else {
-                                *disk_num_bytes
+                            if *disk_bytenr != 0 {
+                                entry.extents.push((*disk_bytenr, *disk_num_bytes));
                             }
                         }
-                        FileExtentBody::Inline { inline_size } => *inline_size as u64,
-                    };
-                    if bytes > 0 {
-                        *map.entry(hdr.objectid).or_default() += bytes;
+                        FileExtentBody::Inline { inline_size } => {
+                            entry.inline += *inline_size as u64;
+                        }
                     }
                 }
             }
@@ -104,15 +111,17 @@ fn build_inode_map(root: &Path) -> Option<HashMap<u64, u64>> {
 }
 
 /// Sum a package's on-disk bytes from a prebuilt inode map. Hardlinked paths
-/// are counted once; files not on the swept subvolume are skipped. `None` when
-/// none of the package's files were found in the map.
+/// are counted once, and a physical extent shared by two of the package's
+/// inodes is counted once. Files not on the swept subvolume are skipped.
+/// `None` when none of the package's files were found in the map.
 fn sum_package_files(
     files: &[PathBuf],
     root: &Path,
     root_dev: Option<u64>,
-    map: &HashMap<u64, u64>,
+    map: &HashMap<u64, InodeExtents>,
 ) -> Option<u64> {
-    let mut seen: HashSet<u64> = HashSet::new();
+    let mut seen_inodes: HashSet<u64> = HashSet::new();
+    let mut seen_bytenr: HashSet<u64> = HashSet::new();
     let mut total = 0u64;
     let mut found = false;
 
@@ -141,10 +150,15 @@ fn sum_package_files(
             continue;
         }
         let ino = meta.ino();
-        if seen.insert(ino) {
-            if let Some(&bytes) = map.get(&ino) {
-                total += bytes;
+        if seen_inodes.insert(ino) {
+            if let Some(extents) = map.get(&ino) {
                 found = true;
+                total += extents.inline;
+                for &(disk_bytenr, disk_num_bytes) in &extents.extents {
+                    if seen_bytenr.insert(disk_bytenr) {
+                        total += disk_num_bytes;
+                    }
+                }
             }
         }
     }
@@ -156,7 +170,7 @@ fn sum_package_files(
 fn sweep_sizes(
     entries: &[PackageEntry],
     config: &Config,
-    map: &HashMap<u64, u64>,
+    map: &HashMap<u64, InodeExtents>,
 ) -> Vec<Option<u64>> {
     let root_dev = std::fs::metadata(&config.root).ok().map(|m| m.dev());
     entries
@@ -293,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sum_package_files_dedups_hardlinks_and_sums() {
+    fn test_sum_package_files_dedups_hardlinks_and_shared_extents() {
         let dir = std::env::temp_dir().join("pkgdu_test_sweep");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -307,16 +321,34 @@ mod tests {
         let dev = std::fs::metadata(&dir).unwrap().dev();
         let ino_a = std::fs::metadata(&a).unwrap().ino();
         let ino_b = std::fs::metadata(&b).unwrap().ino();
-        let mut map = HashMap::new();
-        map.insert(ino_a, 100u64);
-        map.insert(ino_b, 200u64);
+        let mut map: HashMap<u64, InodeExtents> = HashMap::new();
+        map.insert(
+            ino_a,
+            InodeExtents {
+                // Non-zero inline so the hardlink (same inode) must be deduped
+                // by inode, not merely by shared bytenr.
+                inline: 7,
+                extents: vec![(500, 4096), (501, 8192)],
+            },
+        );
+        map.insert(
+            ino_b,
+            InodeExtents {
+                inline: 10,
+                extents: vec![(500, 4096)], // shares bytenr 500 with `a`
+            },
+        );
 
-        // `a` and its hardlink share an inode -> counted once; `b` adds 200.
+        // `a` and its hardlink share an inode (counted once); bytenr 500 is
+        // shared between `a` and `b` (counted once); inline 10 is added.
         let files = vec![a.clone(), b.clone(), c.clone()];
-        assert_eq!(sum_package_files(&files, &dir, Some(dev), &map), Some(300));
+        assert_eq!(
+            sum_package_files(&files, &dir, Some(dev), &map),
+            Some(4096 + 8192 + 7 + 10)
+        );
 
         // Nothing in the map -> None.
-        let empty: HashMap<u64, u64> = HashMap::new();
+        let empty: HashMap<u64, InodeExtents> = HashMap::new();
         assert_eq!(sum_package_files(&files, &dir, Some(dev), &empty), None);
 
         std::fs::remove_dir_all(&dir).ok();
