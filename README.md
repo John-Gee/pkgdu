@@ -92,7 +92,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `[POSITIONAL]...` | (table mode) | Format string or package names |
 | `-H <unit>` | `raw` (format) / `auto` (table) | Human-size: `B`, `K`/`Ki`, `M`/`Mi`, `G`/`Gi`, `T`/`Ti`, `auto`, `auto-si` |
 | `-s <regex>` | — | Search packages by regex on name |
-| `--sort <field>` | `real` | Sort by: `name` (ascending A-Z), `real`/`apparent`/`files` (descending), `ratio` (ascending, best compression first) |
+| `--sort <field>` | `real` | Sort by: `name` (ascending A-Z), `real` (alias `size`)/`apparent`/`files` (descending), `ratio` (ascending, best compression first; requires `--btrfs`) |
 | `-n, --limit <N>` | 20 | Show only top N packages (0 = unlimited) |
 | `--btrfs` | off | Enable btrfs on-disk size tokens (`%z`, `%r`) |
 | `--root <path>` | `/` | Set filesystem root prefix |
@@ -107,6 +107,7 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `--depth <N>` | 1 (with `--tree`) | Tree depth in levels; implies `--tree` |
 | `--breadth <K>` | 5 | Show at most K children per tree directory (0 = no limit) |
 | `--min-percent <P>` | 0.1 with `--tree` | Hide tree entries below P% of their parent |
+| `-h, --help` | — | Print help |
 
 ### Format Tokens
 
