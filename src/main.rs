@@ -45,29 +45,43 @@ fn main() {
     for err in &report.errors {
         eprint_error(err, use_color);
     }
+    for target in &report.missing_targets {
+        eprint_error(&format!("no such package: {}", target), use_color);
+    }
     if cfg.verbose {
         for warn in &report.warnings {
             eprintln!("{}", warn);
         }
     }
 
-    // Render output to stdout
-    let result = if let Some(ref fmt) = cfg.format {
-        report
-            .packages
-            .iter()
-            .map(|pkg| fmt.render(pkg, &cfg))
-            .collect::<Vec<_>>()
-            .join(&cfg.delim)
-    } else if cfg.depth.is_some() {
-        output::render_tree(&report, &cfg)
-    } else {
-        output::render_table(&report, &cfg)
-    };
-    println!("{}", result);
+    // Render output to stdout. Nothing matched means nothing to print — avoid
+    // emitting a bare header.
+    if !report.packages.is_empty() {
+        let result = if let Some(ref fmt) = cfg.format {
+            report
+                .packages
+                .iter()
+                .map(|pkg| fmt.render(pkg, &cfg))
+                .collect::<Vec<_>>()
+                .join(&cfg.delim)
+        } else if cfg.depth.is_some() {
+            output::render_tree(&report, &cfg)
+        } else {
+            output::render_table(&report, &cfg)
+        };
+        println!("{}", result);
+    }
 
-    // Exit codes: 2 when any package or file could not be fully scanned.
+    // Exit codes: 2 when a package or file could not be fully scanned, or some
+    // (but not all) requested targets were unknown; 1 when nothing matched at
+    // all (unknown targets, an empty search, or an empty database).
     if report.skipped_packages + report.permission_errors > 0 || !report.errors.is_empty() {
         std::process::exit(2);
+    }
+    if !report.missing_targets.is_empty() && !report.packages.is_empty() {
+        std::process::exit(2);
+    }
+    if report.packages.is_empty() {
+        std::process::exit(1);
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Fields extracted from a `%desc%` package metadata file.
@@ -340,6 +341,48 @@ pub fn load_local_db(
     Ok((entries, skipped, errors))
 }
 
+/// Name of a package derived from its local DB directory (`{name}-{ver}-{rel}`).
+/// pkgver/pkgrel cannot contain hyphens, so the last two fields are stripped.
+fn dir_package_name(basename: &str) -> Option<String> {
+    let mut parts = basename.rsplitn(3, '-');
+    parts.next()?; // pkgrel
+    parts.next()?; // pkgver
+    parts.next().map(|name| name.to_string())
+}
+
+/// Names of every package installed in the local database, independent of any
+/// search/target filter and of `desc` parse failures (which fall back to the
+/// directory name). Used to tell "not installed" apart from "not matched".
+pub fn db_package_names(dbpath: &Path) -> crate::error::Result<HashSet<String>> {
+    let local_dir = dbpath.join("local");
+    let dirs = match std::fs::read_dir(&local_dir) {
+        Ok(d) => d,
+        Err(e) => return Err(crate::error::PkgduError::Io(e)),
+    };
+
+    let mut names = HashSet::new();
+    for entry in dirs.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("desc").is_file() {
+            continue;
+        }
+        let basename = match path.file_name().and_then(|s| s.to_str()) {
+            Some(b) if b != "ALPM_DB_VERSION" => b,
+            _ => continue,
+        };
+        let name = std::fs::read_to_string(path.join("desc"))
+            .ok()
+            .and_then(|c| parse_desc(&c).ok())
+            .map(|d| d.name)
+            .or_else(|| dir_package_name(basename));
+        if let Some(name) = name {
+            names.insert(name);
+        }
+    }
+
+    Ok(names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,5 +645,37 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "pkg-foo");
         assert_eq!(skipped, 0); // filter non-matches are not counted as skipped
+    }
+
+    #[test]
+    fn test_dir_package_name() {
+        assert_eq!(dir_package_name("badpkg-1.0-1").as_deref(), Some("badpkg"));
+        assert_eq!(
+            dir_package_name("foo-bar-1.0.r1-2").as_deref(),
+            Some("foo-bar")
+        );
+        assert_eq!(dir_package_name("nohyphen"), None);
+    }
+
+    #[test]
+    fn test_db_package_names_includes_all_and_falls_back_to_dir() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let dbpath = tmpdir.path().join("db");
+        let local = dbpath.join("local");
+        std::fs::create_dir_all(&local).unwrap();
+
+        // Normal package: name from desc.
+        let p1 = local.join("pkg-a-1.0-1");
+        std::fs::create_dir_all(&p1).unwrap();
+        std::fs::write(p1.join("desc"), "%NAME%\npkg-a\n%VERSION%\n1.0-1\n").unwrap();
+
+        // Malformed desc: name falls back to the directory.
+        let p2 = local.join("pkg-b-2.0-1");
+        std::fs::create_dir_all(&p2).unwrap();
+        std::fs::write(p2.join("desc"), "%NAME%\n%VERSION%\n2.0-1\n").unwrap();
+
+        let names = db_package_names(&dbpath).unwrap();
+        assert!(names.contains("pkg-a"), "got: {names:?}");
+        assert!(names.contains("pkg-b"), "got: {names:?}");
     }
 }

@@ -439,3 +439,119 @@ fn test_scan_builds_trees_when_depth_set() {
             .real_size
     );
 }
+
+#[test]
+fn test_scan_reports_unknown_target() {
+    let (_tmp, mut config) = create_test_chroot();
+    config.targets = vec!["nosuchpkg".to_string()];
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    assert!(report.packages.is_empty());
+    assert_eq!(report.missing_targets, vec!["nosuchpkg".to_string()]);
+}
+
+#[test]
+fn test_scan_reports_unknown_target_alongside_matches() {
+    let (_tmp, mut config) = create_test_chroot();
+    config.targets = vec!["testpkg".to_string(), "nosuchpkg".to_string()];
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    assert_eq!(report.packages.len(), 1);
+    assert_eq!(report.packages[0].name, "testpkg");
+    assert_eq!(report.missing_targets, vec!["nosuchpkg".to_string()]);
+}
+
+#[test]
+fn test_scan_target_not_missing_when_search_excludes_it() {
+    use regex::Regex;
+    let (_tmp, mut config) = create_test_chroot();
+    // secpkg is installed but does not match the regex.
+    config.targets = vec!["secpkg".to_string()];
+    config.search = Some(Regex::new("^test").unwrap());
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    assert!(report.packages.is_empty());
+    assert!(
+        report.missing_targets.is_empty(),
+        "installed package must not be reported missing: {:?}",
+        report.missing_targets
+    );
+}
+
+#[test]
+fn test_scan_malformed_target_not_reported_missing() {
+    let (_tmp, mut config) = create_test_chroot();
+    let bad = config.dbpath.join("local").join("badpkg-1.0-1");
+    fs::create_dir_all(&bad).unwrap();
+    fs::write(bad.join("desc"), "%NAME%\n%VERSION%\n%SIZE%\n10\n").unwrap();
+    config.targets = vec!["badpkg".to_string()];
+
+    let report = scan::scan_packages(&config).unwrap();
+
+    assert!(
+        report.missing_targets.is_empty(),
+        "malformed package exists; must not be reported missing: {:?}",
+        report.missing_targets
+    );
+    assert!(report.errors.iter().any(|e| e.contains("badpkg")));
+}
+
+/// Run the built binary against the test chroot with extra args.
+fn run_cli(config: &Config, extra: &[&str]) -> std::process::Output {
+    let root = config.root.to_str().unwrap();
+    let db = config.dbpath.to_str().unwrap();
+    let mut args = vec!["--root", root, "--dbpath", db];
+    args.extend_from_slice(extra);
+    std::process::Command::new(env!("CARGO_BIN_EXE_pkgdu"))
+        .args(&args)
+        .output()
+        .expect("spawn pkgdu")
+}
+
+#[test]
+fn test_cli_unknown_target_exits_1_with_no_stdout() {
+    let (_tmp, config) = create_test_chroot();
+    let out = run_cli(&config, &["nosuchpkg"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "stdout should be empty: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no such package: nosuchpkg"));
+}
+
+#[test]
+fn test_cli_partial_unknown_target_exits_2() {
+    let (_tmp, config) = create_test_chroot();
+    let out = run_cli(&config, &["testpkg", "nosuchpkg"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("testpkg"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no such package: nosuchpkg"));
+}
+
+#[test]
+fn test_cli_empty_search_exits_1() {
+    let (_tmp, config) = create_test_chroot();
+    let out = run_cli(&config, &["-s", "zzzznomatch"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+}

@@ -75,6 +75,8 @@ pub struct ScanReport {
     pub total_disk: u64,
     /// Per-package file trees for the shown packages (empty unless the tree view is on).
     pub trees: Vec<PackageTree>,
+    /// Explicitly requested package names that matched nothing in the database.
+    pub missing_targets: Vec<String>,
 }
 
 impl PackageResult {
@@ -192,6 +194,22 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     // Load and parse pacman local DB (parallel over parsed pkg lists)
     let (entries, skipped, load_errors) = load_local_db(dbpath, &filter)?;
 
+    // Explicit targets that are not installed at all are a user error worth
+    // reporting, not a silently empty result. Checked against the whole
+    // database (not the filtered entries), so a target that merely doesn't
+    // match --search — or whose desc is malformed — is not misreported.
+    let missing_targets: Vec<String> = if config.targets.is_empty() {
+        Vec::new()
+    } else {
+        let installed = crate::pacman::db_package_names(dbpath)?;
+        config
+            .targets
+            .iter()
+            .filter(|t| !installed.contains(t.as_str()))
+            .cloned()
+            .collect()
+    };
+
     if entries.is_empty() {
         return Ok(ScanReport {
             packages: vec![],
@@ -199,6 +217,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
             permission_errors: 0,
             errors: load_errors,
             warnings: Vec::new(),
+            missing_targets,
             ..Default::default()
         });
     }
@@ -302,6 +321,7 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
         total_files,
         total_disk,
         trees: Vec::new(),
+        missing_targets,
     };
 
     if show_progress {
