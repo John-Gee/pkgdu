@@ -183,7 +183,7 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
             right_align: true,
         },
         Column {
-            title: "PCT",
+            title: "%",
             width: 0,
             right_align: true,
         },
@@ -613,7 +613,8 @@ mod tests {
         let report = report_of(sample_packages());
         let cfg = make_config(false);
         let result = render_table(&report, &cfg);
-        assert!(result.contains("PCT"));
+        let header = result.lines().next().unwrap_or("");
+        assert!(header.contains('%'), "header missing % column: {header}");
         // zlib real 2_697_614_592 of total 3_610_814_592 ~= 74.7%
         assert!(result.contains("74.7%"), "got:\n{result}");
     }
