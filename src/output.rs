@@ -392,7 +392,12 @@ pub fn render_tree(report: &ScanReport, cfg: &Config) -> String {
     use owo_colors::OwoColorize;
 
     let has_color = color_enabled(cfg);
-    let grand_total = if cfg.apparent_size {
+    // With --btrfs the tree rows are on-disk (DISK) bytes, so percentages are
+    // relative to the on-disk grand total.
+    let btrfs_active = cfg.btrfs && report.total_disk > 0;
+    let grand_total = if btrfs_active {
+        report.total_disk
+    } else if cfg.apparent_size {
         report.total_apparent
     } else {
         report.total_real

@@ -229,9 +229,10 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
     let mut all_warns_count = 0usize;
     let mut all_warns: Vec<String> = Vec::new();
 
-    // Query btrfs on-disk sizes if enabled
+    // Query btrfs on-disk sizes if enabled. A full scan builds a subvolume-wide
+    // inode map once and reuses it; a targeted query reads extents per file.
     let mut btrfs_errors: Vec<String> = Vec::new();
-    let btrfs_disk: Vec<Option<u64>> = if config.btrfs {
+    let (btrfs_disk, btrfs_map): (Vec<Option<u64>>, Option<btrfs::InodeMap>) = if config.btrfs {
         match btrfs::detect_btrfs(&config.root) {
             btrfs::BtrfsStatus::Yes => btrfs::compressed_sizes(&entries, config),
             btrfs::BtrfsStatus::No => {
@@ -239,18 +240,18 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
                     "{} is not on a btrfs filesystem; ignoring --btrfs",
                     config.root.display()
                 ));
-                vec![None; entries.len()]
+                (vec![None; entries.len()], None)
             }
             btrfs::BtrfsStatus::PermissionDenied => {
                 btrfs_errors.push(format!(
                     "Permission denied accessing btrfs data on {} (try running with sudo)",
                     config.root.display()
                 ));
-                vec![None; entries.len()]
+                (vec![None; entries.len()], None)
             }
         }
     } else {
-        vec![None; entries.len()]
+        (vec![None; entries.len()], None)
     };
 
     // Stat all files of all packages in parallel. rayon's `collect` preserves
@@ -349,18 +350,29 @@ pub fn scan_packages(config: &Config) -> Result<ScanReport> {
             .iter()
             .filter_map(|pkg| {
                 let idx = *index_by_name.get(pkg.name.as_str())?;
-                let sizes = &scanned[idx].sizes;
-                let files: Vec<(std::path::PathBuf, u64)> = entries[idx]
+                let entry = &entries[idx];
+                // With --btrfs the tree is built from per-file on-disk (DISK)
+                // bytes; otherwise from the real/apparent sizes already stat'd.
+                let (sizes, total) = match pkg.btrfs_disk {
+                    Some(disk) => (
+                        btrfs::package_file_disk_sizes(entry, config, btrfs_map.as_ref()).0,
+                        disk,
+                    ),
+                    None => (
+                        scanned[idx].sizes.clone(),
+                        if use_apparent {
+                            pkg.apparent_size
+                        } else {
+                            pkg.real_size
+                        },
+                    ),
+                };
+                let files: Vec<(std::path::PathBuf, u64)> = entry
                     .files
                     .iter()
                     .cloned()
                     .zip(sizes.iter().copied())
                     .collect();
-                let total = if use_apparent {
-                    pkg.apparent_size
-                } else {
-                    pkg.real_size
-                };
                 Some(build_package_tree(&pkg.name, total, &files))
             })
             .collect();
