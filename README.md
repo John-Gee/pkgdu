@@ -2,6 +2,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
+[![GitHub](https://img.shields.io/badge/GitHub-John--Gee%2Fpkgdu-blue)](https://github.com/John-Gee/pkgdu)
 
 `pkgdu` reports the **real on-disk size** of each installed Arch Linux package,
 complementing `expac` with actual filesystem measurements instead of metadata.
@@ -136,26 +137,27 @@ pkgdu/
 ├── Cargo.toml
 ├── LICENSE
 ├── README.md
-├── docs/
-│   ├── PLAN.md          # Design decisions and data flow
-│   └── TASKS.md         # Implementation tasks
-└── src/
-    ├── main.rs          # CLI (clap), dispatch, output rendering
-    ├── error.rs         # PkgduError enum
-    ├── config.rs        # Config struct, validation
-    ├── pacman.rs        # Parse pacman.conf, local DB, file manifests
-    ├── scan.rs          # Parallel stat() scanner (rayon)
-    ├── format.rs        # Format string tokenizer and renderer
-    ├── human_size.rs    # Byte → human-readable formatting
-    ├── output.rs        # Color, table formatting
-    └── btrfs.rs         # btrfs on-disk sizes
+├── src/
+│   ├── main.rs          # CLI entry, dispatch, exit codes
+│   ├── lib.rs           # Library root
+│   ├── error.rs         # PkgduError enum
+│   ├── config.rs        # Config struct, CLI validation
+│   ├── pacman.rs        # pacman.conf, local DB, file manifests
+│   ├── scan.rs          # Parallel stat() scanner (rayon)
+│   ├── btrfs.rs         # btrfs on-disk sizes
+│   ├── format.rs        # Format string tokenizer and renderer
+│   ├── human_size.rs    # Byte → human-readable formatting
+│   ├── tree.rs          # File/dir tree for --tree
+│   └── output.rs        # Color, table and tree rendering
+└── tests/
+    └── integration.rs
 ```
 
 ## Performance
 
-- Full system scan (~1500 packages, ~300K files): **< 2 seconds** on NVMe
-- Single package: **< 10 ms**
-- Built with LTO for optimal release performance
+- Full system scan (~2500 packages, ~600k files): under 1 s warm on NVMe
+- Single package: a few milliseconds
+- Release profile uses fat LTO
 
 ## License
 
