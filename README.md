@@ -1,11 +1,9 @@
 # pkgdu — Real Disk Usage per Package for Arch Linux
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-
-`pkgdu` reports the **real on-disk size** of each installed Arch Linux package.
-`expac -Q '%m'` reports pacman's *declared* install size from package metadata;
-`pkgdu` measures what is actually allocated — block rounding, compression,
-hardlinks, and post-install changes included.
+`pkgdu` reports the **real on-disk size** of each installed Arch Linux package —
+what is actually allocated, including block rounding, compression, hardlinks and
+post-install changes. `expac -Q '%m'` reports only pacman's *declared* size from
+package metadata, which is often wrong.
 
 ```
 $ pkgdu -H auto rocm-llvm miopen-hip rocblas
@@ -13,18 +11,20 @@ PACKAGE          REAL      %
 rocm-llvm     6.8 GiB  78.1%
 miopen-hip    1.4 GiB  16.6%
 rocblas     475.1 MiB   5.3%
+
+$ expac -Q '%n %m' rocm-llvm miopen-hip rocblas   # declared size, in bytes
+rocm-llvm 7364364057
+miopen-hip 2447557128
+rocblas 1388086875
 ```
 
-`%` is each package's share of the total size of all matching packages.
-For the same three packages, `expac -Q '%n %m'` reports 7364364057,
-2447557128 and 1388086875 bytes — `rocblas` uses barely a third of the space
-its metadata claims, because the ROCm packages share hardlinked libraries.
-
-A full scan of ~2500 packages (~600k files) takes under a second warm on NVMe.
+`rocblas` uses barely a third of the space its metadata claims, because the ROCm
+packages share hardlinked libraries. A full scan of ~2500 packages (~600k files)
+takes under a second warm on NVMe.
 
 ## Installation
 
-`pkgdu` is packaged for Arch Linux; build it with the bundled `PKGBUILD`:
+Build the bundled `PKGBUILD`:
 
 ```bash
 git clone https://github.com/John-Gee/pkgdu
@@ -32,7 +32,7 @@ cd pkgdu
 makepkg -si
 ```
 
-It's also available on the AUR as `pkgdu`.
+It's also on the AUR as `pkgdu`.
 
 ## Usage
 
@@ -91,9 +91,16 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `--depth <N>` | 1 (with `--tree`) | Tree depth in levels; implies `--tree` |
 | `--breadth <K>` | 5 | Show at most K children per tree directory (0 = no limit) |
 | `--min-percent <P>` | 0.1 | Hide tree entries below P% of their parent (requires `--tree`) |
+| `-V, --version` | — | Print version |
 | `-h, --help` | — | Print help |
 
+`%` is each package's share of the total size of all matching packages; it's
+omitted when only one package matches.
+
 ### Format Tokens
+
+Pass a string containing `%` as the first argument to print one line per package
+with exactly the fields you ask for — useful for scripting and pipes.
 
 | Token | Field | Source |
 |-------|-------|--------|
@@ -106,8 +113,3 @@ pkgdu --root /mnt/arch --dbpath /mnt/arch/var/lib/pacman -H auto
 | `%z` | btrfs on-disk usage | all file extents via btrfs ioctls, compressed or not (requires `--btrfs` + root) |
 | `%r` | btrfs ratio | `(%z / %a) * 100`; 100% = uncompressed |
 | `%%` | Literal `%` | — |
-
-## License
-
-This project is licensed under the GNU General Public License v3.0 — see the
-[LICENSE](LICENSE) file for details.
