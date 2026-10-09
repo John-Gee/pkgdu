@@ -170,6 +170,9 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
     } else {
         report.total_real
     };
+    // A single matching package is always 100% of itself; the column only
+    // carries information when there is more than one package to compare.
+    let show_pct = report.total_packages >= 2;
 
     let mut cols = vec![
         Column {
@@ -182,12 +185,14 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
             width: 0,
             right_align: true,
         },
-        Column {
+    ];
+    if show_pct {
+        cols.push(Column {
             title: "%",
             width: 0,
             right_align: true,
-        },
-    ];
+        });
+    }
     if btrfs_active {
         cols.push(Column {
             title: "DISK",
@@ -263,8 +268,10 @@ pub fn render_table(report: &ScanReport, cfg: &Config) -> String {
         let mut cells = vec![
             (row.name.clone(), Style::Plain),
             (format_field_size(row.size, cfg.humansize), Style::Cyan),
-            (format_pct(row.size, grand_total), Style::Plain),
         ];
+        if show_pct {
+            cells.push((format_pct(row.size, grand_total), Style::Plain));
+        }
         if btrfs_active {
             cells.push((
                 row.disk
@@ -622,6 +629,17 @@ mod tests {
         assert!(header.contains('%'), "header missing % column: {header}");
         // zlib real 2_697_614_592 of total 3_610_814_592 ~= 74.7%
         assert!(result.contains("74.7%"), "got:\n{result}");
+    }
+
+    #[test]
+    fn test_pct_column_hidden_for_single_package() {
+        let mut report = report_of(sample_packages());
+        report.packages.truncate(1);
+        report.total_packages = 1; // only one package matched
+        let cfg = make_config(false);
+        let result = render_table(&report, &cfg);
+        let header = result.lines().next().unwrap_or("");
+        assert!(!header.contains('%'), "header should omit %: {header}");
     }
 
     #[test]
