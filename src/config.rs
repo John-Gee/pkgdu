@@ -88,7 +88,7 @@ pub struct RawArgs {
     #[arg(long, default_value_t = 5)]
     pub breadth: usize,
 
-    /// Prune entries below this percentage of their parent (default 0.1 with --tree)
+    /// Prune entries below this percentage of their parent (requires --tree; default 0.1)
     #[arg(long)]
     pub min_percent: Option<f64>,
 }
@@ -263,20 +263,28 @@ impl RawArgs {
         };
 
         // 8. --- Tree view ---
-        // --tree enables the tree (--depth implies it); --min-percent
-        // defaults to 0.1 with the tree.
-        // (dirstat-rs parity) and 0.0 (off) otherwise.
+        // --tree enables the tree (--depth implies it); --min-percent is a
+        // tree-only option (below P% of the parent) and defaults to 0.1 there.
         let depth = if self.tree || self.depth.is_some() {
             Some(self.depth.unwrap_or(1))
         } else {
             None
         };
-        let min_percent = match self.min_percent {
-            Some(p) if !(0.0..=100.0).contains(&p) => {
+        // Validate the value before the tree requirement so a bad value is
+        // reported as such regardless of whether --tree was given.
+        if let Some(p) = self.min_percent {
+            if !(0.0..=100.0).contains(&p) {
                 return Err(PkgduError::Config(
                     "--min-percent must be between 0 and 100".to_string(),
                 ));
             }
+        }
+        if self.min_percent.is_some() && depth.is_none() {
+            return Err(PkgduError::Config(
+                "--min-percent requires --tree".to_string(),
+            ));
+        }
+        let min_percent = match self.min_percent {
             Some(p) => p,
             None if depth.is_some() => 0.1,
             None => 0.0,
@@ -513,6 +521,14 @@ mod tests {
     #[test]
     fn test_min_percent_out_of_range_is_error() {
         let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--min-percent", "150"]);
-        assert!(raw.into_config().is_err());
+        let msg = raw.into_config().err().unwrap().to_string();
+        assert!(msg.contains("between 0 and 100"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_min_percent_requires_tree() {
+        let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--min-percent", "5"]);
+        let msg = raw.into_config().err().unwrap().to_string();
+        assert!(msg.contains("requires --tree"), "got: {msg}");
     }
 }
