@@ -18,7 +18,11 @@ pub enum SortField {
 
 /// Raw CLI arguments — built by clap.
 #[derive(clap::Parser, Debug)]
-#[command(name = "pkgdu", about = "Real disk usage per package for Arch Linux")]
+#[command(
+    name = "pkgdu",
+    version,
+    about = "Real disk usage per package for Arch Linux"
+)]
 pub struct RawArgs {
     /// Format string (printf-style) or package names
     #[arg(trailing_var_arg = true)]
@@ -530,5 +534,13 @@ mod tests {
         let raw = <RawArgs as clap::Parser>::parse_from(["pkgdu", "--min-percent", "5"]);
         let msg = raw.into_config().err().unwrap().to_string();
         assert!(msg.contains("requires --tree"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_version_flag_is_available() {
+        for flag in ["--version", "-V"] {
+            let err = <RawArgs as clap::Parser>::try_parse_from(["pkgdu", flag]).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        }
     }
 }
