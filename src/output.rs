@@ -740,10 +740,15 @@ mod tests {
     #[test]
     fn test_render_tree_breadth_cap_shows_summary() {
         use crate::tree::{PackageTree, TreeNode};
-        let nodes: Vec<TreeNode> = (0..8)
-            .map(|i| TreeNode {
+        // Children sum to the parent's 100 so the hidden-summary size and
+        // percentage are meaningful.
+        let sizes = [20u64, 15, 14, 13, 12, 11, 8, 7];
+        let nodes: Vec<TreeNode> = sizes
+            .iter()
+            .enumerate()
+            .map(|(i, &size)| TreeNode {
                 name: format!("d{i}"),
-                size: 100 - i,
+                size,
                 is_dir: false,
                 children: vec![],
             })
@@ -764,6 +769,43 @@ mod tests {
         let out = render_tree(&report, &cfg);
         assert!(out.contains("d0") && out.contains("d1") && out.contains("d2"));
         assert!(!out.contains("d3"));
-        assert!(out.contains("… 5 more"), "got:\n{out}");
+
+        // d3..d7 are hidden: 13+12+11+8+7 = 51 bytes = 51.0% of the parent.
+        let summary = out
+            .lines()
+            .find(|l| l.contains("… 5 more"))
+            .unwrap_or_else(|| panic!("no summary line in:\n{out}"));
+        let cells: Vec<&str> = summary.split_whitespace().collect();
+        assert_eq!(cells[cells.len() - 2], "51", "size cell wrong: {summary}");
+        assert_eq!(cells[cells.len() - 1], "51.0%", "pct cell wrong: {summary}");
+    }
+
+    #[test]
+    fn test_render_tree_percentages_use_disk_total_when_btrfs() {
+        use crate::tree::{PackageTree, TreeNode};
+        let report = ScanReport {
+            total_real: 100,
+            total_apparent: 100,
+            total_disk: 40,
+            trees: vec![PackageTree {
+                name: "pkg".to_string(),
+                size: 40,
+                nodes: vec![TreeNode {
+                    name: "lib".to_string(),
+                    size: 40,
+                    is_dir: false,
+                    children: vec![],
+                }],
+            }],
+            ..Default::default()
+        };
+        let mut cfg = make_config(true);
+        cfg.depth = Some(1);
+        let out = render_tree(&report, &cfg);
+        // Package row is 40/40 of the DISK total, not 40/100 of real.
+        assert!(
+            out.lines().next().unwrap().contains("100.0%"),
+            "got:\n{out}"
+        );
     }
 }
